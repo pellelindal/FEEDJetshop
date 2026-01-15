@@ -21,6 +21,7 @@ product_fields:
     fallback: sv-SE
     validations:
       max_length: 200
+    optional: true
 
   - target: SubName
     source: texts[name_2].value
@@ -38,6 +39,7 @@ product_fields:
     fallback: sv-SE
     validations:
       max_length: 300
+    optional: true
 
   - target: ProductDescription
     source: texts[productinfolong].value
@@ -48,6 +50,7 @@ product_fields:
       - name: newline_to_br
     validations:
       max_length: 2000
+    optional: true
 
   - target: EanCode
     source: attributes[monitor_GTIN].value
@@ -60,6 +63,7 @@ stock_fields:
     source: attributes[monitor_disp].value
     type: int
     coerce: coerce
+    optional: true
 
   - target: DeliveryDate
     source: attributes[monitor_deliverydate].value
@@ -74,6 +78,28 @@ category_fields:
   item_type: string
   coerce: strict
   strategy: replace
+  optional: true
+
+dynamic_fields_auto_map:
+  enabled: true
+  coerce: coerce
+  type: string
+  join_delimiter: ", "
+  skip_range: true
+  allowed_keys:
+    - atr_height
+    - atr_dia
+    - size
+    - atr_colour
+    - atr_grouping
+    - atr_length
+    - spec_cat
+    - spec_subcat
+    - tab-data-youtube
+    - atr_kdiao
+    - atr_kdian
+    - atr_kheight
+    - list_bundle
 
 dynamic_fields_allowlist:
   - key: atr_height
@@ -81,6 +107,7 @@ dynamic_fields_allowlist:
     type: string
     coerce: coerce
     cultures: [sv-SE, nb-NO]
+    optional: true
 
   - key: atr_colour
     source: attributes[atr_colour]
@@ -91,11 +118,40 @@ dynamic_fields_allowlist:
       - name: data_register_label
         args:
           join_delimiter: ", "
+    optional: true
 
   - key: atr_grouping
     source: attributes[atr_grouping].value
     type: string
     coerce: strict
+    cultures: [sv-SE, nb-NO]
+    optional: true
+
+  - key: atr_length
+    source: attributes[atr_length].value
+    type: string
+    coerce: coerce
+    cultures: [sv-SE, nb-NO]
+    optional: true
+
+  - key: atr_kheight
+    source: attributes[atr_kheight].value
+    type: string
+    coerce: coerce
+    cultures: [sv-SE, nb-NO]
+    optional: true
+
+  - key: atr_kdiao
+    source: attributes[atr_kdiao].value
+    type: string
+    coerce: coerce
+    cultures: [sv-SE, nb-NO]
+    optional: true
+
+  - key: atr_kdian
+    source: attributes[atr_kdian].value
+    type: string
+    coerce: coerce
     cultures: [sv-SE, nb-NO]
     optional: true
 
@@ -105,6 +161,7 @@ dynamic_fields_allowlist:
     coerce: strict
     cultures: [sv-SE, nb-NO]
     fallback: sv-SE
+    optional: true
 
   - key: spec_subcat
     source: attributes[spec_subcat].value
@@ -112,6 +169,7 @@ dynamic_fields_allowlist:
     coerce: strict
     cultures: [sv-SE, nb-NO]
     fallback: sv-SE
+    optional: true
 
 price_lists:
   - name: b2c_se
@@ -123,6 +181,7 @@ price_lists:
     clear_discount_on_missing: true
     type: int
     coerce: coerce
+    optional: true
 
   - name: b2c_no
     price_list_id: 0036268d-6d49-4a21-b0a2-3c12af44fb14
@@ -133,6 +192,7 @@ price_lists:
     clear_discount_on_missing: true
     type: int
     coerce: coerce
+    optional: true
 
   - name: b2b
     price_list_id: f2585a2d-452f-45eb-9cb1-9080134ce0c9
@@ -143,3 +203,4 @@ price_lists:
     clear_discount_on_missing: true
     type: int
     coerce: coerce
+    optional: true

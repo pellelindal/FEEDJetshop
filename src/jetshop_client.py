@@ -403,7 +403,10 @@ def _build_product_data_xml(product_data: Dict[str, Any]) -> str:
         for key, value in stock_data.items():
             if value is None:
                 continue
-            stock_fields.append(f"<{key}>{escape_xml(_format_xml_value(value))}</{key}>")
+            if value is NIL_VALUE:
+                stock_fields.append(f"<{key} xsi:nil=\"true\" />")
+            else:
+                stock_fields.append(f"<{key}>{escape_xml(_format_xml_value(value))}</{key}>")
         if stock_fields:
             article_number = escape_xml(str(product_data.get("ArticleNumber", "")))
             stock_fields.insert(0, f"<ArticleNumber>{article_number}</ArticleNumber>")

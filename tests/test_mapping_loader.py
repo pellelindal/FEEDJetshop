@@ -7,6 +7,8 @@ def test_load_mapping():
     assert "sv-SE" in mapping.cultures
     assert any(entry.target == "ArticleNumber" for entry in mapping.product_fields)
     assert any(entry.key == "atr_colour" for entry in mapping.dynamic_fields_allowlist)
+    assert mapping.dynamic_fields_auto_map.enabled is True
+    assert "atr_dia" in mapping.dynamic_fields_auto_map.allowed_keys
     assert len(mapping.price_lists) == 3
 
 

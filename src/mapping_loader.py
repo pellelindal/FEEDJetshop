@@ -82,6 +82,17 @@ class PriceListMapping:
 
 
 @dataclass(frozen=True)
+class AutoDynamicFieldConfig:
+    enabled: bool
+    coerce: str
+    type: str
+    include_data_types: Optional[List[str]]
+    join_delimiter: str
+    skip_range: bool
+    allowed_keys: List[str]
+
+
+@dataclass(frozen=True)
 class MappingConfig:
     version: int
     cultures: List[str]
@@ -90,6 +101,7 @@ class MappingConfig:
     product_fields: List[FieldMapping]
     stock_fields: List[FieldMapping]
     category_fields: CategoryMapping
+    dynamic_fields_auto_map: AutoDynamicFieldConfig
     dynamic_fields_allowlist: List[DynamicFieldMapping]
     price_lists: List[PriceListMapping]
 
@@ -144,6 +156,7 @@ def load_mapping(path: str | Path) -> MappingConfig:
         product_fields=product_fields,
         stock_fields=stock_fields,
         category_fields=category_fields,
+        dynamic_fields_auto_map=_parse_auto_dynamic_fields(raw.get("dynamic_fields_auto_map")),
         dynamic_fields_allowlist=dynamic_fields,
         price_lists=_parse_price_lists(raw.get("price_lists")),
     )
@@ -221,6 +234,67 @@ def _parse_price_lists(items: Any) -> List[PriceListMapping]:
             )
         )
     return mappings
+
+
+def _parse_auto_dynamic_fields(value: Any) -> AutoDynamicFieldConfig:
+    if value is None:
+        return AutoDynamicFieldConfig(
+            enabled=False,
+            coerce="coerce",
+            type="string",
+            include_data_types=None,
+            join_delimiter=", ",
+            skip_range=True,
+            allowed_keys=[],
+        )
+
+    if isinstance(value, bool):
+        return AutoDynamicFieldConfig(
+            enabled=value,
+            coerce="coerce",
+            type="string",
+            include_data_types=None,
+            join_delimiter=", ",
+            skip_range=True,
+            allowed_keys=[],
+        )
+
+    if not isinstance(value, dict):
+        raise MappingError("dynamic_fields_auto_map must be a boolean or mapping object")
+
+    coerce = value.get("coerce", "coerce")
+    if coerce not in {"strict", "coerce"}:
+        raise MappingError("dynamic_fields_auto_map.coerce must be 'strict' or 'coerce'")
+
+    field_type = value.get("type", "string")
+    allowed_types = {"string", "int", "float", "decimal", "bool", "date", "datetime", "list"}
+    if field_type not in allowed_types:
+        raise MappingError("dynamic_fields_auto_map.type must be a valid field type")
+
+    include_data_types = value.get("include_data_types")
+    if include_data_types is not None:
+        if not isinstance(include_data_types, list) or not all(
+            isinstance(item, str) for item in include_data_types
+        ):
+            raise MappingError("dynamic_fields_auto_map.include_data_types must be a list of strings")
+
+    join_delimiter = value.get("join_delimiter", ", ")
+    if not isinstance(join_delimiter, str):
+        raise MappingError("dynamic_fields_auto_map.join_delimiter must be a string")
+
+    allowed_keys = value.get("allowed_keys") or []
+    if not isinstance(allowed_keys, list) or not all(isinstance(item, str) for item in allowed_keys):
+        raise MappingError("dynamic_fields_auto_map.allowed_keys must be a list of strings")
+
+    return AutoDynamicFieldConfig(
+        enabled=bool(value.get("enabled", False)),
+        coerce=coerce,
+        type=field_type,
+        include_data_types=include_data_types,
+        join_delimiter=join_delimiter,
+        skip_range=bool(value.get("skip_range", True)),
+        allowed_keys=allowed_keys,
+    )
 
 
 def _parse_mapping_entry(item: Any, require_target: bool = False, require_key: bool = False) -> Dict[str, Any]:

@@ -9,12 +9,15 @@ import json
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+
 from .diff_engine import diff_categories, diff_dynamic_fields, diff_product_data, diff_stock
 from .jetshop_client import NIL_VALUE
 from .mapping_loader import (
+    AutoDynamicFieldConfig,
     DynamicFieldMapping,
     FieldMapping,
     MappingConfig,
+    TransformSpec,
     parse_source_selector,
 )
 from .transformers import TransformContext, apply_transforms
@@ -238,7 +241,7 @@ class SyncEngine:
                     current_stock = (
                         current_by_culture.get(self.mapping.cultures[0], {}).get("StockData", {})
                     )
-                    for key in ["UseAdvancedStatus", "StockStatusWhenOutOfStock"]:
+                    for key in ["UseAdvancedStatus"]:
                         if key not in stock_payload and current_stock.get(key) is not None:
                             stock_payload[key] = current_stock.get(key)
 
@@ -375,6 +378,18 @@ class SyncEngine:
                 if value is None:
                     continue
                 dynamic_fields.setdefault(entry.key, {})[culture] = value
+
+        if self.mapping.dynamic_fields_auto_map.enabled:
+            _apply_auto_dynamic_fields(
+                self.mapping.dynamic_fields_auto_map,
+                dynamic_fields,
+                product,
+                attributes_by_code,
+                texts_by_code,
+                self.mapping,
+                self.logger,
+                errors,
+            )
 
         price_lists = _build_price_list_items(
             self.mapping,
@@ -580,6 +595,7 @@ def _build_price_list_items(
             "PriceIncVat": price_value,
         }
 
+        discount_cleared = False
         if entry.discounted_price_source:
             disc_raw, _attribute = _resolve_source(
                 entry.discounted_price_source, product, attributes_by_code, {}
@@ -595,6 +611,7 @@ def _build_price_list_items(
             if empty_discount:
                 if entry.clear_discount_on_missing:
                     item["DiscountedPriceIncVat"] = -1
+                    discount_cleared = True
             else:
                 discount_value = _coerce_with_policy(
                     disc_value,
@@ -609,6 +626,50 @@ def _build_price_list_items(
                     item["DiscountedPriceIncVat"] = discount_value
         elif entry.clear_discount_on_missing:
             item["DiscountedPriceIncVat"] = -1
+            discount_cleared = True
+
+        if entry.discount_period_source:
+            period_raw, _attribute = _resolve_source(
+                entry.discount_period_source, product, attributes_by_code, {}
+            )
+            period_value = period_raw.get("value") if isinstance(period_raw, dict) else period_raw
+            if is_empty(period_value):
+                if entry.clear_discount_on_missing or discount_cleared:
+                    item["UseDiscountDateSpan"] = False
+            elif isinstance(period_value, (list, tuple)) and len(period_value) >= 2:
+                start_value = _coerce_with_policy(
+                    period_value[0],
+                    "datetime",
+                    entry.coerce,
+                    None,
+                    f"{entry.name or entry.price_list_id}_discount_start",
+                    logger,
+                    errors,
+                )
+                end_value = _coerce_with_policy(
+                    period_value[1],
+                    "datetime",
+                    entry.coerce,
+                    None,
+                    f"{entry.name or entry.price_list_id}_discount_end",
+                    logger,
+                    errors,
+                )
+                if start_value is not None and end_value is not None:
+                    item["UseDiscountDateSpan"] = True
+                    item["DiscountStartDate"] = start_value
+                    item["DiscountEndDate"] = end_value
+                elif entry.clear_discount_on_missing or discount_cleared:
+                    item["UseDiscountDateSpan"] = False
+            else:
+                message = f"price_list:{entry.price_list_id} invalid discount period format"
+                if entry.coerce == "coerce":
+                    logger.warning(
+                        "coerce_failed",
+                        extra={"event": "coerce_failed", "field": "discount_period", "detail": message},
+                    )
+                else:
+                    errors.append(message)
 
         if entry.hide_product_source:
             show_raw, _attribute = _resolve_source(
@@ -783,6 +844,93 @@ def _build_dynamic_inputs(
             item_values.append({"Culture": culture, "Value": value})
         inputs.append({"ArticleNumber": product_no, "Key": key, "ItemValues": item_values})
     return inputs
+
+
+def _apply_auto_dynamic_fields(
+    auto_config: AutoDynamicFieldConfig,
+    dynamic_fields: Dict[str, Dict[str, Any]],
+    product: Dict[str, Any],
+    attributes_by_code: Dict[str, Dict[str, Any]],
+    texts_by_code: Dict[str, Dict[str, Any]],
+    mapping: MappingConfig,
+    logger,
+    errors: List[str],
+) -> None:
+    mapped_attrs = set(mapping.mapped_attribute_codes())
+    existing_keys = set(dynamic_fields.keys())
+    include_data_types = auto_config.include_data_types
+    allowed_keys = set(auto_config.allowed_keys or [])
+    if not allowed_keys:
+        return
+
+    for code, attribute in attributes_by_code.items():
+        if not code or code in mapped_attrs or code in existing_keys:
+            continue
+        if code not in allowed_keys:
+            continue
+
+        data_type = attribute.get("dataType")
+        if include_data_types and data_type not in include_data_types:
+            continue
+
+        value = attribute.get("value")
+        if auto_config.skip_range and attribute.get("range") and isinstance(value, list):
+            continue
+
+        entry_type = auto_config.type
+        item_type = None
+        transforms: List[TransformSpec] = []
+        if data_type in {"DATA_REGISTER", "DATA_REGISTER_MULTI"}:
+            if isinstance(value, list) and entry_type == "string":
+                entry_type = "list"
+                item_type = "string"
+            transforms.append(
+                TransformSpec(
+                    name="data_register_label",
+                    args={"join_delimiter": auto_config.join_delimiter},
+                )
+            )
+        elif isinstance(value, list):
+            if entry_type == "string":
+                entry_type = "list"
+                item_type = "string"
+            transforms.append(
+                TransformSpec(
+                    name="join_list",
+                    args={"join_delimiter": auto_config.join_delimiter},
+                )
+            )
+
+        entry = DynamicFieldMapping(
+            key=code,
+            source=f"attributes[{code}]",
+            source_by_culture=None,
+            fallback_by_culture=None,
+            cultures=None,
+            fallback=None,
+            type=entry_type,
+            item_type=item_type,
+            coerce=auto_config.coerce,
+            transforms=transforms,
+            validations={},
+            optional=True,
+            allow_empty=False,
+        )
+
+        for culture in mapping.cultures:
+            mapped_value = _apply_dynamic_mapping(
+                entry,
+                product,
+                attributes_by_code,
+                texts_by_code,
+                mapping,
+                culture,
+                logger,
+                errors,
+            )
+            if mapped_value is None:
+                continue
+            dynamic_fields.setdefault(code, {})[culture] = mapped_value
 
 
 def _json_default(value: Any) -> str:

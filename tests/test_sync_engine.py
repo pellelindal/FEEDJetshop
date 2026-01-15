@@ -1,5 +1,7 @@
 import logging
 from pathlib import Path
+from datetime import datetime
+
 
 from src.jetshop_client import NIL_VALUE
 from src.mapping_loader import load_mapping
@@ -65,6 +67,7 @@ class StubJetshopClient:
         self.dyn_failures = dyn_failures or []
         self.add_update_calls = 0
         self.dyn_save_calls = 0
+        self.dyn_inputs = []
         self.price_list_calls = 0
         self.price_list_inputs = []
         self.add_update_payloads = []
@@ -86,6 +89,7 @@ class StubJetshopClient:
 
     def dyn_save(self, inputs):
         self.dyn_save_calls += 1
+        self.dyn_inputs.append(inputs)
         return self.dyn_failures
 
     def price_list_update(self, inputs):
@@ -218,6 +222,45 @@ def test_sync_engine_clears_discount_on_zero(tmp_path, monkeypatch):
         assert item.get("DiscountedPriceIncVat") == -1
 
 
+def test_sync_engine_discount_period_sets_dates(tmp_path, monkeypatch):
+    mapping_path = Path(__file__).resolve().parents[1] / "mappings" / "mapping.yaml"
+    mapping = load_mapping(mapping_path)
+
+    product = build_sample_product()
+    product["attributes"].append(
+        {"importCode": "b2c_disc_price_mp_se", "dataType": "FLOAT", "value": 99.0}
+    )
+    product["attributes"].append(
+        {
+            "importCode": "b2c_disc_bo_se",
+            "dataType": "DATE",
+            "range": True,
+            "value": ["2026-01-19T00:00:00.000+00:00", "2026-01-26T00:00:00.000+00:00"],
+        }
+    )
+
+    feed_client = StubFeedClient([product])
+    jetshop_client = StubJetshopClient()
+    logger = logging.getLogger("test_sync_engine_discount_period")
+    logger.addHandler(logging.NullHandler())
+    state_store = StateStore(tmp_path / "state" / "last_run.json")
+
+    monkeypatch.chdir(tmp_path)
+
+    engine = SyncEngine(feed_client, jetshop_client, mapping, logger, state_store)
+    report = engine.sync("2025-01-01T00:00:00Z", "Pelle-1092-10", None, False)
+
+    assert report["counts"]["failed"] == 0
+    se_item = next(
+        item
+        for item in jetshop_client.price_list_inputs
+        if item.get("PriceListId") == "7c7dfec3-2312-4dc9-a74f-913f3da0c686"
+    )
+    assert se_item.get("UseDiscountDateSpan") is True
+    assert isinstance(se_item.get("DiscountStartDate"), datetime)
+    assert isinstance(se_item.get("DiscountEndDate"), datetime)
+
+
 def test_sync_engine_clears_categories_before_update(tmp_path, monkeypatch):
     mapping_path = Path(__file__).resolve().parents[1] / "mappings" / "mapping.yaml"
     mapping = load_mapping(mapping_path)
@@ -250,3 +293,56 @@ def test_sync_engine_clears_categories_before_update(tmp_path, monkeypatch):
         ]
         assert delete_entries
         assert delete_entries[0]["CategoryId"] == "999"
+
+
+def test_sync_engine_does_not_write_missing_mappings(tmp_path, monkeypatch):
+    mapping_path = Path(__file__).resolve().parents[1] / "mappings" / "mapping.yaml"
+    mapping = load_mapping(mapping_path)
+
+    product = build_sample_product()
+    product["attributes"].append(
+        {"importCode": "unmapped_attr", "dataType": "FLOAT", "value": 12.5}
+    )
+    product["texts"].append(
+        {"importCode": "unmapped_text", "value": {"sv": "Example"}, "maxLength": 50}
+    )
+
+    feed_client = StubFeedClient([product])
+    jetshop_client = StubJetshopClient()
+    logger = logging.getLogger("test_sync_engine_missing_mappings")
+    logger.addHandler(logging.NullHandler())
+    state_store = StateStore(tmp_path / "state" / "last_run.json")
+
+    monkeypatch.chdir(tmp_path)
+
+    engine = SyncEngine(feed_client, jetshop_client, mapping, logger, state_store)
+    engine.sync("2025-01-01T00:00:00Z", "Pelle-1092-10", None, True)
+
+    missing_path = tmp_path / "missing_mapped_fields.yaml"
+    assert not missing_path.exists()
+
+
+def test_sync_engine_auto_maps_dynamic_fields(tmp_path, monkeypatch):
+    mapping_path = Path(__file__).resolve().parents[1] / "mappings" / "mapping.yaml"
+    mapping = load_mapping(mapping_path)
+
+    product = build_sample_product()
+    product["attributes"].append(
+        {"importCode": "atr_dia", "dataType": "FLOAT", "value": 55.0}
+    )
+
+    feed_client = StubFeedClient([product])
+    jetshop_client = StubJetshopClient()
+    logger = logging.getLogger("test_sync_engine_auto_dyn")
+    logger.addHandler(logging.NullHandler())
+    state_store = StateStore(tmp_path / "state" / "last_run.json")
+
+    monkeypatch.chdir(tmp_path)
+
+    engine = SyncEngine(feed_client, jetshop_client, mapping, logger, state_store)
+    report = engine.sync("2025-01-01T00:00:00Z", "Pelle-1092-10", None, False)
+
+    assert report["counts"]["failed"] == 0
+    assert jetshop_client.dyn_inputs
+    posted_keys = {item["Key"] for item in jetshop_client.dyn_inputs[0]}
+    assert "atr_dia" in posted_keys
