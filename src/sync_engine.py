@@ -172,6 +172,20 @@ class SyncEngine:
             desired_set = {str(item) for item in categories}
             removed_categories = sorted(current_set - desired_set)
 
+        categories_payload = None
+        removed_categories: List[str] = []
+        if categories is not None:
+            current_set = set()
+            for culture in self.mapping.cultures:
+                culture_categories = current_by_culture.get(culture, {}).get("ProductInCategories", []) or []
+                for item in culture_categories:
+                    if item is None:
+                        continue
+                    current_set.add(str(item))
+            desired_set = {str(item) for item in categories}
+            removed_categories = sorted(current_set - desired_set)
+            categories_payload = _build_category_payload(categories, removed_categories)
+
         dynamic_diffs = diff_dynamic_fields(current_dynamic, dynamic_fields)
         for price_item in price_lists:
             self.logger.info(
@@ -229,27 +243,20 @@ class SyncEngine:
 
                 template_id = getattr(self.jetshop_client, "template_id", None)
                 if removed_categories:
-                    reset_payloads = []
-                    for culture in self.mapping.cultures:
-                        reset_payload = {"ArticleNumber": product_no, "Culture": culture, "ProductInCategories": []}
-                        if template_id:
-                            reset_payload["TemplateId"] = template_id
-                        reset_payloads.append(reset_payload)
                     self.logger.info(
-                        "category_reset",
+                        "category_delete_connection",
                         extra={
-                            "event": "category_reset",
+                            "event": "category_delete_connection",
                             "productNo": product_no,
                             "removedCategories": removed_categories,
                         },
                     )
-                    self.jetshop_client.product_add_update(reset_payloads)
 
                 payloads = []
                 for culture in self.mapping.cultures:
                     payload = dict(desired_by_culture.get(culture) or {})
-                    if categories is not None:
-                        payload["ProductInCategories"] = categories
+                    if categories_payload is not None:
+                        payload["ProductInCategories"] = categories_payload
                     if stock_payload:
                         payload["StockData"] = stock_payload
                     if template_id:
@@ -729,7 +736,21 @@ def _coerce_with_policy(
             )
             return value
         errors.append(f"{field_name}: {exc.message}")
-        return None
+    return None
+
+
+def _build_category_payload(categories: List[str], removed_categories: List[str]) -> List[Dict[str, Any]]:
+    payload: List[Dict[str, Any]] = []
+    for category_id in categories:
+        payload.append({"CategoryId": str(category_id)})
+    for category_id in removed_categories:
+        payload.append(
+            {
+                "CategoryId": str(category_id),
+                "ProductInCategoryState": "DeleteConnection",
+            }
+        )
+    return payload
 
 
 def _build_dynamic_inputs(

@@ -90,6 +90,18 @@ class JetshopClient:
         return result
 
     def product_add_update(self, product_data_list: List[Dict[str, Any]]) -> List[ProductResult]:
+        for item in product_data_list:
+            if "ProductInCategories" in item:
+                categories_xml = _build_categories_xml(item)
+                self.logger.debug(
+                    "category_payload_xml",
+                    extra={
+                        "event": "category_payload_xml",
+                        "productNo": item.get("ArticleNumber"),
+                        "culture": item.get("Culture"),
+                        "categoryXml": categories_xml,
+                    },
+                )
         products_xml = "\n".join([_build_product_data_xml(item) for item in product_data_list])
         body = f"""
 <Product_AddUpdate xmlns="{WS_NS}">
@@ -338,25 +350,7 @@ def _build_product_data_xml(product_data: Dict[str, Any]) -> str:
             continue
         fields.append(f"<{key}>{escape_xml(_format_xml_value(value))}</{key}>")
 
-    categories = product_data.get("ProductInCategories")
-    categories_xml = ""
-    if categories is not None:
-        if categories:
-            category_items = []
-            for category_id in categories:
-                category_items.append(
-                    f"""
-<ProductInCategoryData>
-  <ArticleNumber>{escape_xml(str(product_data.get("ArticleNumber", "")))}</ArticleNumber>
-  <CategoryId>{escape_xml(str(category_id))}</CategoryId>
-  <SortOrder>0</SortOrder>
-  <IsCanonical>false</IsCanonical>
-</ProductInCategoryData>
-""".strip()
-                )
-            categories_xml = f"<ProductInCategories>{''.join(category_items)}</ProductInCategories>"
-        else:
-            categories_xml = "<ProductInCategories />"
+    categories_xml = _build_categories_xml(product_data)
 
     stock_data = product_data.get("StockData") or {}
     stock_xml = ""
@@ -372,6 +366,54 @@ def _build_product_data_xml(product_data: Dict[str, Any]) -> str:
             stock_xml = f"<StockData>{''.join(stock_fields)}</StockData>"
 
     return f"<ProductData>{''.join(fields)}{categories_xml}{stock_xml}</ProductData>"
+
+
+def _build_categories_xml(product_data: Dict[str, Any]) -> str:
+    categories = product_data.get("ProductInCategories")
+    if categories is None:
+        return ""
+    if not categories:
+        return "<ProductInCategories />"
+
+    category_items = []
+    for entry in categories:
+        if isinstance(entry, dict):
+            category_id = entry.get("CategoryId")
+            product_id = entry.get("ProductId")
+            state = entry.get("ProductInCategoryState")
+            if state:
+                sort_order = entry.get("SortOrder")
+                is_canonical = entry.get("IsCanonical")
+            else:
+                sort_order = entry.get("SortOrder", 0)
+                is_canonical = entry.get("IsCanonical", False)
+        else:
+            category_id = entry
+            product_id = None
+            sort_order = 0
+            is_canonical = False
+            state = None
+
+        if not category_id:
+            continue
+
+        category_fields = [
+            f"<ArticleNumber>{escape_xml(str(product_data.get('ArticleNumber', '')))}</ArticleNumber>",
+            f"<CategoryId>{escape_xml(str(category_id))}</CategoryId>",
+        ]
+        if product_id is not None:
+            category_fields.append(f"<ProductId>{escape_xml(_format_xml_value(product_id))}</ProductId>")
+        if sort_order is not None:
+            category_fields.append(f"<SortOrder>{escape_xml(_format_xml_value(sort_order))}</SortOrder>")
+        if is_canonical is not None:
+            category_fields.append(f"<IsCanonical>{escape_xml(_format_xml_value(is_canonical))}</IsCanonical>")
+        if state is not None:
+            category_fields.append(
+                f"<ProductInCategoryState>{escape_xml(_format_xml_value(state))}</ProductInCategoryState>"
+            )
+        category_items.append(f"<ProductInCategoryData>{''.join(category_fields)}</ProductInCategoryData>")
+
+    return f"<ProductInCategories>{''.join(category_items)}</ProductInCategories>"
 
 
 def _build_dynamic_input_xml(item: Dict[str, Any]) -> str:

@@ -239,10 +239,14 @@ def test_sync_engine_clears_categories_before_update(tmp_path, monkeypatch):
     report = engine.sync("2025-01-01T00:00:00Z", "Pelle-1092-10", None, False)
 
     assert report["counts"]["failed"] == 0
-    assert jetshop_client.add_update_calls == 2
-    reset_payloads = jetshop_client.add_update_payloads[0]
-    for payload in reset_payloads:
-        assert payload.get("ProductInCategories") == []
-    update_payloads = jetshop_client.add_update_payloads[1]
+    assert jetshop_client.add_update_calls == 1
+    update_payloads = jetshop_client.add_update_payloads[0]
     for payload in update_payloads:
-        assert "999" not in payload.get("ProductInCategories", [])
+        categories = payload.get("ProductInCategories", [])
+        delete_entries = [
+            item
+            for item in categories
+            if isinstance(item, dict) and item.get("ProductInCategoryState") == "DeleteConnection"
+        ]
+        assert delete_entries
+        assert delete_entries[0]["CategoryId"] == "999"

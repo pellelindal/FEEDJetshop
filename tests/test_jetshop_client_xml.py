@@ -51,6 +51,22 @@ def test_build_product_data_xml_empty_categories():
     assert "<ProductInCategories />" in xml
 
 
+def test_build_product_data_xml_category_state():
+    xml = _build_product_data_xml(
+        {
+            "ArticleNumber": "Pelle-1092-10",
+            "Culture": "sv-SE",
+            "ProductInCategories": [
+                {"CategoryId": "150"},
+                {"CategoryId": "999", "ProductInCategoryState": "DeleteConnection"},
+            ],
+        }
+    )
+    assert "<CategoryId>150</CategoryId>" in xml
+    assert "<CategoryId>999</CategoryId>" in xml
+    assert "<ProductInCategoryState>DeleteConnection</ProductInCategoryState>" in xml
+
+
 def test_build_dynamic_input_xml():
     xml = _build_dynamic_input_xml(
         {
