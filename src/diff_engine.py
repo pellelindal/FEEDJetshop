@@ -51,17 +51,32 @@ def diff_categories(
     desired_categories: List[str],
     culture: Optional[str],
 ) -> List[DiffItem]:
-    if sorted(current_categories) != sorted(desired_categories):
+    current_ids = _normalize_category_ids(current_categories)
+    desired_ids = _normalize_category_ids(desired_categories)
+    if sorted(current_ids) != sorted(desired_ids):
         return [
             DiffItem(
                 "ProductInCategories",
-                current_categories,
-                desired_categories,
+                current_ids,
+                desired_ids,
                 culture=culture,
                 section="Categories",
             )
         ]
     return []
+
+
+def _normalize_category_ids(categories: List[Any]) -> List[str]:
+    normalized: List[str] = []
+    for item in categories or []:
+        if isinstance(item, dict):
+            category_id = item.get("CategoryId")
+        else:
+            category_id = item
+        if category_id is None:
+            continue
+        normalized.append(str(category_id))
+    return normalized
 
 
 def diff_stock(

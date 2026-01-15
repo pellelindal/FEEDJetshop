@@ -179,9 +179,10 @@ class SyncEngine:
             for culture in self.mapping.cultures:
                 culture_categories = current_by_culture.get(culture, {}).get("ProductInCategories", []) or []
                 for item in culture_categories:
-                    if item is None:
+                    category_id = _get_category_id(item)
+                    if category_id is None:
                         continue
-                    current_set.add(str(item))
+                    current_set.add(category_id)
             desired_set = {str(item) for item in categories}
             removed_categories = sorted(current_set - desired_set)
             categories_payload = _build_category_payload(categories, removed_categories)
@@ -739,18 +740,32 @@ def _coerce_with_policy(
     return None
 
 
-def _build_category_payload(categories: List[str], removed_categories: List[str]) -> List[Dict[str, Any]]:
+def _build_category_payload(
+    categories: List[str],
+    removed_categories: List[str],
+) -> List[Dict[str, Any]]:
     payload: List[Dict[str, Any]] = []
     for category_id in categories:
         payload.append({"CategoryId": str(category_id)})
     for category_id in removed_categories:
-        payload.append(
-            {
-                "CategoryId": str(category_id),
-                "ProductInCategoryState": "DeleteConnection",
-            }
-        )
+        entry = {
+            "CategoryId": str(category_id),
+            "ProductInCategoryState": "DeleteConnection",
+            "SortOrder": 0,
+            "IsCanonical": False,
+        }
+        payload.append(entry)
     return payload
+
+
+def _get_category_id(item: Any) -> Optional[str]:
+    if isinstance(item, dict):
+        category_id = item.get("CategoryId")
+    else:
+        category_id = item
+    if category_id is None:
+        return None
+    return str(category_id)
 
 
 def _build_dynamic_inputs(

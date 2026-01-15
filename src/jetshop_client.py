@@ -62,31 +62,38 @@ class JetshopClient:
         body = f"""
 <Product_Get xmlns="{WS_NS}">
   <productOptions>
-    <ArticleNumbers>
-      <string>{escape_xml(article_number)}</string>
-    </ArticleNumbers>
+    <ArticleNumber>{escape_xml(article_number)}</ArticleNumber>
     <Culture>{escape_xml(culture)}</Culture>
   </productOptions>
 </Product_Get>
 """.strip()
         response_xml = self._post_soap(body, "Product_Get")
         root = ET.fromstring(response_xml)
-        product_data = root.find(".//ws:ProductData", NS)
+        product_data = _find_product_data(root, article_number)
         if product_data is None:
             return None
 
         result = {
-            "ArticleNumber": _text(product_data, "ArticleNumber"),
-            "Culture": _text(product_data, "Culture"),
-            "Name": _text(product_data, "Name"),
-            "SubName": _text(product_data, "SubName"),
-            "ShortDescription": _text(product_data, "ShortDescription"),
-            "ProductDescription": _text(product_data, "ProductDescription"),
-            "Price": _text(product_data, "Price"),
-            "EanCode": _text(product_data, "EanCode"),
+            "ArticleNumber": _text_any_ns(product_data, "ArticleNumber"),
+            "Culture": _text_any_ns(product_data, "Culture"),
+            "Name": _text_any_ns(product_data, "Name"),
+            "SubName": _text_any_ns(product_data, "SubName"),
+            "ShortDescription": _text_any_ns(product_data, "ShortDescription"),
+            "ProductDescription": _text_any_ns(product_data, "ProductDescription"),
+            "Price": _text_any_ns(product_data, "Price"),
+            "EanCode": _text_any_ns(product_data, "EanCode"),
             "ProductInCategories": _parse_categories(product_data),
             "StockData": _parse_stock(product_data),
         }
+        self.logger.debug(
+            "jetshop_categories_current",
+            extra={
+                "event": "jetshop_categories_current",
+                "productNo": article_number,
+                "culture": culture,
+                "categories": result.get("ProductInCategories", []),
+            },
+        )
         return result
 
     def product_add_update(self, product_data_list: List[Dict[str, Any]]) -> List[ProductResult]:
@@ -290,11 +297,14 @@ def _text(parent: ET.Element, tag: str) -> Optional[str]:
 
 
 def _parse_categories(product_data: ET.Element) -> List[str]:
-    categories = []
-    for item in product_data.findall(".//ws:ProductInCategoryData", NS):
-        category_id = _text(item, "CategoryId")
-        if category_id:
-            categories.append(category_id)
+    categories: List[str] = []
+    for item in product_data.iter():
+        if not item.tag.endswith("ProductInCategoryData"):
+            continue
+        category_id = _find_text_any_ns(item, "CategoryId")
+        if not category_id:
+            continue
+        categories.append(category_id.strip() if isinstance(category_id, str) else category_id)
     return categories
 
 
@@ -310,6 +320,40 @@ def _parse_stock(product_data: ET.Element) -> Dict[str, Any]:
         "UseAdvancedStatus": _parse_bool(_text(stock_node, "UseAdvancedStatus")),
         "StockStatusWhenOutOfStock": _parse_int(_text(stock_node, "StockStatusWhenOutOfStock")),
     }
+
+
+def _find_text_any_ns(parent: ET.Element, tag_suffix: str) -> Optional[str]:
+    for child in parent.iter():
+        if child.tag.endswith(tag_suffix):
+            return child.text
+    return None
+
+
+def _text_any_ns(parent: ET.Element, tag: str) -> Optional[str]:
+    value = _text(parent, tag)
+    if value is not None:
+        return value
+    return _child_text_any_ns(parent, tag)
+
+
+def _child_text_any_ns(parent: ET.Element, tag_suffix: str) -> Optional[str]:
+    for child in list(parent):
+        if child.tag.endswith(tag_suffix):
+            return child.text
+    return None
+
+
+def _find_product_data(root: ET.Element, article_number: str) -> Optional[ET.Element]:
+    candidates = root.findall(".//ws:ProductData", NS)
+    if not candidates:
+        candidates = [node for node in root.iter() if node.tag.endswith("ProductData")]
+    if not candidates:
+        return None
+    for node in candidates:
+        article = _child_text_any_ns(node, "ArticleNumber")
+        if article == article_number:
+            return node
+    return candidates[0]
 
 
 def _parse_int(value: Optional[str]) -> Optional[int]:

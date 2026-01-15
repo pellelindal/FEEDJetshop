@@ -177,8 +177,7 @@ def test_product_get_builds_product_options(monkeypatch):
     client.product_get("sv-SE", "Pelle-1092-10")
 
     assert "<productOptions>" in captured["body"]
-    assert "<ArticleNumbers>" in captured["body"]
-    assert "<string>Pelle-1092-10</string>" in captured["body"]
+    assert "<ArticleNumber>Pelle-1092-10</ArticleNumber>" in captured["body"]
     assert "<Culture>sv-SE</Culture>" in captured["body"]
 
 
