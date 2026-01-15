@@ -1,0 +1,26 @@
+{
+  "startedAt": "2026-01-15T11:39:35.834813+00:00",
+  "finishedAt": "2026-01-15T11:39:42.246767+00:00",
+  "exportFrom": "2025-01-01T00:00:00Z",
+  "dryRun": false,
+  "counts": {
+    "processed": 1,
+    "updated": 0,
+    "deleted": 0,
+    "skipped": 0,
+    "failed": 1,
+    "no_change": 0
+  },
+  "products": [
+    {
+      "product_no": "Pelle-1092-10",
+      "action": "update",
+      "success": false,
+      "errors": [
+        "SOAP Fault: soap:Sender - System.Web.Services.Protocols.SoapException: Server was unable to read request. ---> System.InvalidOperationException: There is an error in XML document (9, 215). ---> System.FormatException: Input string was not in a correct format.\n   at System.Number.StringToNumber(String str, NumberStyles options, NumberBuffer& number, NumberFormatInfo info, Boolean parseDecimal)\n   at System.Number.ParseInt32(String s, NumberStyles style, NumberFormatInfo info)\n   at Microsoft.Xml.Serialization.GeneratedAssembly.XmlSerializationReader1.Read10_NullableOfInt32(Boolean checkType)\n   at Microsoft.Xml.Serialization.GeneratedAssembly.XmlSerializationReader1.Read69_ArticlePriceListIncVat(Boolean isNullable, Boolean checkType)\n   at Microsoft.Xml.Serialization.GeneratedAssembly.XmlSerializationReader1.Read200_PriceList_UpdateArticleIncVAT()\n   at System.Xml.Serialization.XmlSerializer.Deserialize(XmlReader xmlReader, String encodingStyle, XmlDeserializationEvents events)\n   --- End of inner exception stack trace ---\n   at System.Xml.Serialization.XmlSerializer.Deserialize(XmlReader xmlReader, String encodingStyle, XmlDeserializationEvents events)\n   at System.Web.Services.Protocols.SoapServerProtocol.ReadParameters()\n   --- End of inner exception stack trace ---\n   at System.Web.Services.Protocols.SoapServerProtocol.ReadParameters()\n   at System.Web.Services.Protocols.WebServiceHandler.CoreProcessRequest()"
+      ],
+      "changes": 14,
+      "dynamic_changes": 10
+    }
+  ]
+}

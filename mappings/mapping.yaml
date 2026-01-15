@@ -1,0 +1,145 @@
+version: 1
+cultures:
+  - sv-SE
+  - nb-NO
+fallbacks:
+  nb-NO: sv-SE
+culture_map:
+  sv-SE: sv
+  nb-NO: nb
+
+product_fields:
+  - target: ArticleNumber
+    source: identifier.productNo
+    type: string
+    coerce: strict
+
+  - target: Name
+    source: texts[name_1].value
+    type: string
+    cultures: [sv-SE, nb-NO]
+    fallback: sv-SE
+    validations:
+      max_length: 200
+
+  - target: SubName
+    source: texts[name_2].value
+    type: string
+    cultures: [sv-SE, nb-NO]
+    fallback: sv-SE
+    validations:
+      max_length: 200
+    optional: true
+
+  - target: ShortDescription
+    source: texts[productinfoshort].value
+    type: string
+    cultures: [sv-SE, nb-NO]
+    fallback: sv-SE
+    validations:
+      max_length: 300
+
+  - target: ProductDescription
+    source: texts[productinfolong].value
+    type: string
+    cultures: [sv-SE, nb-NO]
+    fallback: sv-SE
+    transforms:
+      - name: newline_to_br
+    validations:
+      max_length: 2000
+
+  - target: EanCode
+    source: attributes[monitor_GTIN].value
+    type: string
+    coerce: strict
+    optional: true
+
+stock_fields:
+  - target: NewStockCount
+    source: attributes[monitor_disp].value
+    type: int
+    coerce: coerce
+
+  - target: DeliveryDate
+    source: attributes[monitor_deliverydate].value
+    type: datetime
+    coerce: coerce
+    optional: true
+    preserve_if_missing: true
+
+category_fields:
+  source: attributes[jetshop_category_mp].value
+  type: list
+  item_type: string
+  coerce: strict
+  strategy: replace
+
+dynamic_fields_allowlist:
+  - key: atr_height
+    source: attributes[atr_height].value
+    type: string
+    coerce: coerce
+    cultures: [sv-SE, nb-NO]
+
+  - key: atr_colour
+    source: attributes[atr_colour]
+    type: string
+    coerce: strict
+    cultures: [sv-SE, nb-NO]
+    transforms:
+      - name: data_register_label
+        args:
+          join_delimiter: ", "
+
+  - key: atr_grouping
+    source: attributes[atr_grouping].value
+    type: string
+    coerce: strict
+    cultures: [sv-SE, nb-NO]
+    optional: true
+
+  - key: spec_cat
+    source: attributes[spec_cat].value
+    type: string
+    coerce: strict
+    cultures: [sv-SE, nb-NO]
+    fallback: sv-SE
+
+  - key: spec_subcat
+    source: attributes[spec_subcat].value
+    type: string
+    coerce: strict
+    cultures: [sv-SE, nb-NO]
+    fallback: sv-SE
+
+price_lists:
+  - name: b2c_se
+    price_list_id: 7c7dfec3-2312-4dc9-a74f-913f3da0c686
+    price_source: attributes[b2c_price_se].value
+    discounted_price_source: attributes[b2c_disc_price_mp_se].value
+    discount_period_source: attributes[b2c_disc_bo_se].value
+    hide_product_source: attributes[se_show_mp].value
+    clear_discount_on_missing: true
+    type: int
+    coerce: coerce
+
+  - name: b2c_no
+    price_list_id: 0036268d-6d49-4a21-b0a2-3c12af44fb14
+    price_source: attributes[b2c_price_no].value
+    discounted_price_source: attributes[b2c_disc_price_mp_no].value
+    discount_period_source: attributes[b2c_disc_bo_no].value
+    hide_product_source: attributes[no_show_mp].value
+    clear_discount_on_missing: true
+    type: int
+    coerce: coerce
+
+  - name: b2b
+    price_list_id: f2585a2d-452f-45eb-9cb1-9080134ce0c9
+    price_source: attributes[b2c_price_b2b].value
+    discounted_price_source: attributes[b2c_disc_price_mp_b2b].value
+    discount_period_source: attributes[b2c_disc_bo_b2b].value
+    hide_product_source: attributes[b2b_show_mp].value
+    clear_discount_on_missing: true
+    type: int
+    coerce: coerce

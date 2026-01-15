@@ -1,0 +1,26 @@
+{
+  "startedAt": "2026-01-15T10:07:47.724197+00:00",
+  "finishedAt": "2026-01-15T10:07:51.973191+00:00",
+  "exportFrom": "2025-01-01T00:00:00Z",
+  "dryRun": false,
+  "counts": {
+    "processed": 1,
+    "updated": 0,
+    "deleted": 0,
+    "skipped": 0,
+    "failed": 1,
+    "no_change": 0
+  },
+  "products": [
+    {
+      "product_no": "Pelle-1092-10",
+      "action": "update",
+      "success": false,
+      "errors": [
+        "Dynamic field save failed: atr_height:No dynamic field, connected to product, found with key., atr_colour:No dynamic field, connected to product, found with key., atr_grouping:No dynamic field, connected to product, found with key., spec_cat:No dynamic field, connected to product, found with key., spec_subcat:No dynamic field, connected to product, found with key."
+      ],
+      "changes": 16,
+      "dynamic_changes": 10
+    }
+  ]
+}
