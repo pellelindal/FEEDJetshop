@@ -202,13 +202,57 @@ class JetshopClient:
 """.strip()
         self._post_soap(body, "PriceList_UpdateArticleIncVAT")
 
+    def upload_image(self, base64_code: str, file_name: str, image_name: str) -> None:
+        code = base64_code.strip()
+        body = f"""
+<UploadImage xmlns="{WS_NS}">
+  <imageFileOptions>
+    <ImageFileOptions>
+      <ImageByte>{escape_xml(code)}</ImageByte>
+      <FileName>{escape_xml(file_name)}</FileName>
+      <ImageName>{escape_xml(image_name)}</ImageName>
+    </ImageFileOptions>
+  </imageFileOptions>
+</UploadImage>
+""".strip()
+        self._post_soap(body, "UploadImage")
+
+    def product_add_update_images(self, article_numbers: List[str]) -> None:
+        items_xml = "\n".join(
+            [
+                f"<ArticleNumberImages><ArticleNumber>{escape_xml(num)}</ArticleNumber><Reload>true</Reload></ArticleNumberImages>"
+                for num in article_numbers
+            ]
+        )
+        body = f"""
+<Product_AddUpdateImages xmlns="{WS_NS}">
+  <articleNumbers>
+    {items_xml}
+  </articleNumbers>
+  <divider>.</divider>
+</Product_AddUpdateImages>
+""".strip()
+        self._post_soap(body, "Product_AddUpdateImages")
+
     def _post_soap(self, body_xml: str, operation: str) -> str:
         envelope = _build_envelope(body_xml, self.header_xml)
+        request_body, request_truncated, request_length = _truncate_response(envelope)
+        self.logger.info(
+            "jetshop_api_request",
+            extra={
+                "event": "jetshop_api_request",
+                "operation": operation,
+                "requestBody": request_body,
+                "requestLength": request_length,
+                "requestTruncated": request_truncated,
+            },
+        )
         start = time.monotonic()
         success = False
         error_message = None
         status_code = None
         response_snippet = None
+        response_text = None
         try:
             response = request_with_retry(
                 self.session,
@@ -250,6 +294,20 @@ class JetshopClient:
             if response_snippet:
                 extra["responseSnippet"] = response_snippet
             log_fn("jetshop_request", extra=extra)
+            if response_text is not None:
+                body, truncated, length = _truncate_response(response_text)
+                log_fn(
+                    "jetshop_api_response",
+                    extra={
+                        "event": "jetshop_api_response",
+                        "operation": operation,
+                        "statusCode": status_code,
+                        "success": success,
+                        "responseBody": body,
+                        "responseLength": length,
+                        "responseTruncated": truncated,
+                    },
+                )
 
 
 def _build_header_xml(config: Config) -> str:
@@ -515,3 +573,11 @@ def _build_price_list_item_xml(item: Dict[str, Any]) -> str:
         else:
             fields.append(f"<{key}>{escape_xml(_format_xml_value(value))}</{key}>")
     return f"<ArticlePriceListIncVat>{''.join(fields)}</ArticlePriceListIncVat>"
+
+
+def _truncate_response(response_text: str, max_chars: int = 4000) -> tuple[str, bool, int]:
+    text = response_text or ""
+    length = len(text)
+    if max_chars <= 0 or length <= max_chars:
+        return text, False, length
+    return text[:max_chars], True, length

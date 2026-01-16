@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
 from decimal import Decimal
 import json
@@ -32,6 +32,7 @@ class ProductProcessResult:
     errors: List[str]
     changes: int
     dynamic_changes: int
+    change_summary: Dict[str, List[str]] = field(default_factory=dict)
 
 
 class SyncEngine:
@@ -56,7 +57,8 @@ class SyncEngine:
         limit: Optional[int],
         dry_run: bool,
     ) -> Dict[str, Any]:
-        started_at = datetime.now(timezone.utc).isoformat()
+        started_time = datetime.now(timezone.utc)
+        started_at = started_time.isoformat()
         products = self.feed_client.fetch_products(export_from, product_no, limit)
 
         results: List[ProductProcessResult] = []
@@ -93,7 +95,9 @@ class SyncEngine:
             else:
                 counts["updated"] += 1
 
-        finished_at = datetime.now(timezone.utc).isoformat()
+        finished_time = datetime.now(timezone.utc)
+        finished_at = finished_time.isoformat()
+        duration_ms = int((finished_time - started_time).total_seconds() * 1000)
         report = {
             "startedAt": started_at,
             "finishedAt": finished_at,
@@ -104,6 +108,83 @@ class SyncEngine:
         }
         if counts["failed"] == 0:
             self.state_store.write_now()
+
+        updated_products: List[str] = []
+        deleted_products: List[str] = []
+        failed_products: List[str] = []
+        skipped_products: List[str] = []
+        no_change_products: List[str] = []
+        dry_run_products: List[str] = []
+        updated_details: List[Dict[str, Any]] = []
+        failed_details: List[Dict[str, Any]] = []
+
+        for result in results:
+            product_key = result.product_no or ""
+            if result.action == "update":
+                updated_products.append(product_key)
+            elif result.action == "delete":
+                deleted_products.append(product_key)
+            elif result.action == "no_change":
+                no_change_products.append(product_key)
+            elif result.action == "dry_run":
+                dry_run_products.append(product_key)
+            else:
+                skipped_products.append(product_key)
+
+            if not result.success:
+                failed_products.append(product_key)
+
+            detail = {
+                "productNo": product_key,
+                "action": result.action,
+                "success": result.success,
+            }
+            if result.change_summary:
+                detail["changes"] = result.change_summary
+            if result.changes:
+                detail["changeCount"] = result.changes
+            if result.dynamic_changes:
+                detail["dynamicChangeCount"] = result.dynamic_changes
+            if result.errors:
+                detail["errors"] = result.errors
+
+            if result.action in {"update", "dry_run"}:
+                updated_details.append(detail)
+            if not result.success:
+                failed_details.append(detail)
+
+        summary_text = (
+            "processed={processed} updated={updated} deleted={deleted} failed={failed} "
+            "no_change={no_change} dry_run={dry_run}"
+        ).format(
+            processed=counts["processed"],
+            updated=counts["updated"],
+            deleted=counts["deleted"],
+            failed=counts["failed"],
+            no_change=counts["no_change"],
+            dry_run=len(dry_run_products),
+        )
+        self.logger.info(
+            "run_summary",
+            extra={
+                "event": "run_summary",
+                "startedAt": started_at,
+                "finishedAt": finished_at,
+                "durationMs": duration_ms,
+                "exportFrom": export_from,
+                "dryRun": dry_run,
+                "counts": counts,
+                "updatedProducts": updated_products,
+                "deletedProducts": deleted_products,
+                "failedProducts": failed_products,
+                "skippedProducts": skipped_products,
+                "noChangeProducts": no_change_products,
+                "dryRunProducts": dry_run_products,
+                "updatedDetails": updated_details,
+                "failedDetails": failed_details,
+                "summaryText": summary_text,
+            },
+        )
 
         return report
 
@@ -134,6 +215,7 @@ class SyncEngine:
         desired_by_culture, stock_data, categories, dynamic_fields, price_lists = self._build_desired(
             product, product_no, errors
         )
+        images = _extract_images(product)
         if errors:
             self.logger.error(
                 "mapping_failed",
@@ -214,8 +296,20 @@ class SyncEngine:
                 },
             )
 
-        if not diffs and not dynamic_diffs and not price_lists:
-            return ProductProcessResult(product_no, "no_change", True, [], 0, 0)
+        if images:
+            self.logger.info(
+                "image_sync_plan",
+                extra={
+                    "event": "image_sync_plan",
+                    "productNo": product_no,
+                    "imageCount": len(images),
+                },
+            )
+
+        change_summary = _summarize_changes(diffs, dynamic_diffs, price_lists, images)
+
+        if not diffs and not dynamic_diffs and not price_lists and not images:
+            return ProductProcessResult(product_no, "no_change", True, [], 0, 0, change_summary)
 
         if dry_run:
             diff_payload = {
@@ -223,13 +317,22 @@ class SyncEngine:
                 "productDiffs": [item.__dict__ for item in diffs],
                 "dynamicFieldDiffs": [item.__dict__ for item in dynamic_diffs],
                 "priceLists": price_lists,
+                "images": images,
             }
             Path("diffs").mkdir(parents=True, exist_ok=True)
             Path(f"diffs/{product_no}.json").write_text(
                 json.dumps(diff_payload, ensure_ascii=True, indent=2, default=_json_default),
                 encoding="utf-8",
             )
-            return ProductProcessResult(product_no, "dry_run", True, [], len(diffs), len(dynamic_diffs))
+            return ProductProcessResult(
+                product_no,
+                "dry_run",
+                True,
+                [],
+                len(diffs),
+                len(dynamic_diffs),
+                change_summary,
+            )
 
         try:
             if diffs:
@@ -292,13 +395,32 @@ class SyncEngine:
             if price_lists:
                 self.jetshop_client.price_list_update(price_lists)
 
-            return ProductProcessResult(product_no, "update", True, [], len(diffs), len(dynamic_diffs))
+            if images:
+                self._sync_images(product_no, images)
+
+            return ProductProcessResult(
+                product_no,
+                "update",
+                True,
+                [],
+                len(diffs),
+                len(dynamic_diffs),
+                change_summary,
+            )
         except Exception as exc:
             self.logger.error(
                 "product_update_failed",
                 extra={"event": "product_update_failed", "productNo": product_no, "success": False, "detail": str(exc)},
             )
-            return ProductProcessResult(product_no, "update", False, [str(exc)], len(diffs), len(dynamic_diffs))
+            return ProductProcessResult(
+                product_no,
+                "update",
+                False,
+                [str(exc)],
+                len(diffs),
+                len(dynamic_diffs),
+                change_summary,
+            )
 
     def _build_desired(
         self, product: Dict[str, Any], product_no: str, errors: List[str]
@@ -418,6 +540,47 @@ class SyncEngine:
                 },
             )
 
+    def _sync_images(self, product_no: str, images: List[Dict[str, Any]]) -> None:
+        uploaded = 0
+        for image in images:
+            action = (image.get("action") or "").upper()
+            if action == "DELETE":
+                self.logger.info(
+                    "image_skip_delete",
+                    extra={
+                        "event": "image_skip_delete",
+                        "productNo": product_no,
+                        "mediaCode": image.get("mediaCode"),
+                    },
+                )
+                continue
+            media_code = image.get("mediaCode")
+            file_name = image.get("fileName") or str(media_code)
+            if not media_code or not file_name:
+                continue
+            base64_code = self.feed_client.fetch_media_base64(str(media_code))
+            self.jetshop_client.upload_image(base64_code, file_name, file_name)
+            uploaded += 1
+            self.logger.info(
+                "image_uploaded",
+                extra={
+                    "event": "image_uploaded",
+                    "productNo": product_no,
+                    "mediaCode": media_code,
+                    "fileName": file_name,
+                },
+            )
+        if uploaded:
+            self.jetshop_client.product_add_update_images([product_no])
+            self.logger.info(
+                "image_linked",
+                extra={
+                    "event": "image_linked",
+                    "productNo": product_no,
+                    "uploadedCount": uploaded,
+                },
+            )
+
 
 def _get_product_no(product: Dict[str, Any]) -> Optional[str]:
     identifier = product.get("identifier") or {}
@@ -516,6 +679,8 @@ def _apply_dynamic_mapping(
     value = raw_value
 
     if _attribute_value_removed(source, attribute):
+        if attribute and attribute.get("dataType") == "BOOLEAN":
+            return "true"
         return ""
 
     if attribute and isinstance(raw_value, dict) and "value" in raw_value:
@@ -611,6 +776,26 @@ def _empty_value_for_type(expected_type: str, allow_nil: bool) -> Any:
     return None
 
 
+def _extract_images(product: Dict[str, Any]) -> List[Dict[str, Any]]:
+    media_items = []
+    for media in product.get("media", []) or []:
+        if media.get("mediaType") != "IMAGE":
+            continue
+        media_code = media.get("mediaCode")
+        if not media_code:
+            continue
+        file_name = media.get("fileName") or str(media_code)
+        media_items.append(
+            {
+                "mediaCode": str(media_code),
+                "fileName": file_name,
+                "action": media.get("action"),
+                "sortNo": media.get("sortNo"),
+            }
+        )
+    return sorted(media_items, key=lambda item: item.get("sortNo") or 0)
+
+
 def _build_price_list_items(
     mapping: MappingConfig,
     product_no: str,
@@ -621,125 +806,196 @@ def _build_price_list_items(
 ) -> List[Dict[str, Any]]:
     items: List[Dict[str, Any]] = []
     for entry in mapping.price_lists:
-        raw_value, _attribute = _resolve_source(entry.price_source, product, attributes_by_code, {})
-        value = raw_value.get("value") if isinstance(raw_value, dict) else raw_value
-        if is_empty(value):
-            if entry.optional:
-                continue
-            errors.append(f"price_list:{entry.price_list_id} missing price")
-            continue
-
-        price_value = _coerce_with_policy(
-            value,
-            entry.type,
-            entry.coerce,
-            None,
-            entry.name or entry.price_list_id,
-            logger,
-            errors,
+        raw_value, price_attribute = _resolve_source(
+            entry.price_source, product, attributes_by_code, {}
         )
-        if price_value is None:
+        value = raw_value.get("value") if isinstance(raw_value, dict) else raw_value
+        price_missing = is_empty(value)
+
+        discount_raw = discount_attribute = None
+        if entry.discounted_price_source:
+            discount_raw, discount_attribute = _resolve_source(
+                entry.discounted_price_source, product, attributes_by_code, {}
+            )
+
+        period_raw = period_attribute = None
+        if entry.discount_period_source:
+            period_raw, period_attribute = _resolve_source(
+                entry.discount_period_source, product, attributes_by_code, {}
+            )
+
+        show_raw = show_attribute = None
+        if entry.hide_product_source:
+            show_raw, show_attribute = _resolve_source(
+                entry.hide_product_source, product, attributes_by_code, {}
+            )
+
+        other_change = any(
+            attr is not None for attr in (discount_attribute, period_attribute, show_attribute)
+        )
+        if price_missing and not other_change and price_attribute is None:
+            continue
+        price_value: Optional[int] = None
+        if price_missing and price_attribute is not None and entry.clear_price_on_missing:
+            clear_value = entry.clear_price_value
+            if clear_value is None:
+                clear_value = -1
+            price_value = _coerce_with_policy(
+                clear_value,
+                entry.type,
+                entry.coerce,
+                None,
+                f"{entry.name or entry.price_list_id}_price_clear",
+                logger,
+                errors,
+            )
+            if price_value is None:
+                continue
+        elif not price_missing:
+            price_value = _coerce_with_policy(
+                value,
+                entry.type,
+                entry.coerce,
+                None,
+                entry.name or entry.price_list_id,
+                logger,
+                errors,
+            )
+            if price_value is None:
+                continue
+        elif not other_change:
+            if price_attribute is not None:
+                logger.warning(
+                    "price_list_price_removed",
+                    extra={
+                        "event": "price_list_price_removed",
+                        "productNo": product_no,
+                        "priceListId": entry.price_list_id,
+                    },
+                )
+            elif entry.optional:
+                logger.warning(
+                    "price_list_price_missing",
+                    extra={
+                        "event": "price_list_price_missing",
+                        "productNo": product_no,
+                        "priceListId": entry.price_list_id,
+                    },
+                )
+            else:
+                errors.append(f"price_list:{entry.price_list_id} missing price")
             continue
 
         item: Dict[str, Any] = {
             "ArticleNumber": product_no,
             "PriceListId": entry.price_list_id,
-            "PriceIncVat": price_value,
         }
+        if price_value is not None:
+            item["PriceIncVat"] = price_value
 
         discount_cleared = False
         if entry.discounted_price_source:
-            disc_raw, _attribute = _resolve_source(
-                entry.discounted_price_source, product, attributes_by_code, {}
-            )
-            disc_value = disc_raw.get("value") if isinstance(disc_raw, dict) else disc_raw
-            empty_discount = is_empty(disc_value)
-            if entry.clear_discount_on_missing and not empty_discount:
-                if isinstance(disc_value, (int, float)) and disc_value == 0:
-                    empty_discount = True
-                elif isinstance(disc_value, str) and disc_value.strip() in {"0", "0.0", "0.00"}:
-                    empty_discount = True
-
-            if empty_discount:
-                if entry.clear_discount_on_missing:
-                    item["DiscountedPriceIncVat"] = -1
-                    discount_cleared = True
-            else:
-                discount_value = _coerce_with_policy(
-                    disc_value,
-                    entry.type,
-                    entry.coerce,
-                    None,
-                    f"{entry.name or entry.price_list_id}_discount",
-                    logger,
-                    errors,
+            if discount_attribute is not None:
+                disc_value = (
+                    discount_raw.get("value")
+                    if isinstance(discount_raw, dict)
+                    else discount_raw
                 )
-                if discount_value is not None:
-                    item["DiscountedPriceIncVat"] = discount_value
-        elif entry.clear_discount_on_missing:
-            item["DiscountedPriceIncVat"] = -1
-            discount_cleared = True
+                empty_discount = is_empty(disc_value)
+                if entry.clear_discount_on_missing and not empty_discount:
+                    if isinstance(disc_value, (int, float)) and disc_value == 0:
+                        empty_discount = True
+                    elif isinstance(disc_value, str) and disc_value.strip() in {"0", "0.0", "0.00"}:
+                        empty_discount = True
+
+                if empty_discount:
+                    if entry.clear_discount_on_missing:
+                        item["DiscountedPriceIncVat"] = -1
+                        discount_cleared = True
+                else:
+                    discount_value = _coerce_with_policy(
+                        disc_value,
+                        entry.type,
+                        entry.coerce,
+                        None,
+                        f"{entry.name or entry.price_list_id}_discount",
+                        logger,
+                        errors,
+                    )
+                    if discount_value is not None:
+                        item["DiscountedPriceIncVat"] = discount_value
 
         if entry.discount_period_source:
-            period_raw, _attribute = _resolve_source(
-                entry.discount_period_source, product, attributes_by_code, {}
-            )
-            period_value = period_raw.get("value") if isinstance(period_raw, dict) else period_raw
-            if is_empty(period_value):
-                if entry.clear_discount_on_missing or discount_cleared:
-                    item["UseDiscountDateSpan"] = False
-            elif isinstance(period_value, (list, tuple)) and len(period_value) >= 2:
-                start_value = _coerce_with_policy(
-                    period_value[0],
-                    "datetime",
-                    entry.coerce,
-                    None,
-                    f"{entry.name or entry.price_list_id}_discount_start",
-                    logger,
-                    errors,
+            if period_attribute is not None:
+                period_value = (
+                    period_raw.get("value") if isinstance(period_raw, dict) else period_raw
                 )
-                end_value = _coerce_with_policy(
-                    period_value[1],
-                    "datetime",
-                    entry.coerce,
-                    None,
-                    f"{entry.name or entry.price_list_id}_discount_end",
-                    logger,
-                    errors,
-                )
-                if start_value is not None and end_value is not None:
-                    item["UseDiscountDateSpan"] = True
-                    item["DiscountStartDate"] = start_value
-                    item["DiscountEndDate"] = end_value
-                elif entry.clear_discount_on_missing or discount_cleared:
-                    item["UseDiscountDateSpan"] = False
-            else:
-                message = f"price_list:{entry.price_list_id} invalid discount period format"
-                if entry.coerce == "coerce":
-                    logger.warning(
-                        "coerce_failed",
-                        extra={"event": "coerce_failed", "field": "discount_period", "detail": message},
+                if is_empty(period_value):
+                    if entry.clear_discount_on_missing or discount_cleared:
+                        item["UseDiscountDateSpan"] = False
+                elif isinstance(period_value, (list, tuple)) and len(period_value) >= 2:
+                    start_value = _coerce_with_policy(
+                        period_value[0],
+                        "datetime",
+                        entry.coerce,
+                        None,
+                        f"{entry.name or entry.price_list_id}_discount_start",
+                        logger,
+                        errors,
                     )
+                    end_value = _coerce_with_policy(
+                        period_value[1],
+                        "datetime",
+                        entry.coerce,
+                        None,
+                        f"{entry.name or entry.price_list_id}_discount_end",
+                        logger,
+                        errors,
+                    )
+                    if start_value is not None and end_value is not None:
+                        item["UseDiscountDateSpan"] = True
+                        item["DiscountStartDate"] = start_value
+                        item["DiscountEndDate"] = end_value
+                    elif entry.clear_discount_on_missing or discount_cleared:
+                        item["UseDiscountDateSpan"] = False
                 else:
-                    errors.append(message)
+                    message = f"price_list:{entry.price_list_id} invalid discount period format"
+                    if entry.coerce == "coerce":
+                        logger.warning(
+                            "coerce_failed",
+                            extra={
+                                "event": "coerce_failed",
+                                "field": "discount_period",
+                                "detail": message,
+                            },
+                        )
+                    else:
+                        errors.append(message)
+            elif discount_cleared:
+                item["UseDiscountDateSpan"] = False
 
         if entry.hide_product_source:
-            show_raw, _attribute = _resolve_source(
-                entry.hide_product_source, product, attributes_by_code, {}
-            )
-            show_value = show_raw.get("value") if isinstance(show_raw, dict) else show_raw
-            if not is_empty(show_value):
-                show_bool = _coerce_with_policy(
-                    show_value,
-                    "bool",
-                    entry.coerce,
-                    None,
-                    f"{entry.name or entry.price_list_id}_hide",
-                    logger,
-                    errors,
-                )
-                if show_bool is not None:
-                    item["HideProduct"] = not bool(show_bool)
+            if show_attribute is not None:
+                if _attribute_value_removed(entry.hide_product_source, show_attribute):
+                    item["HideProduct"] = True
+                else:
+                    show_value = (
+                        show_raw.get("value") if isinstance(show_raw, dict) else show_raw
+                    )
+                    if is_empty(show_value):
+                        item["HideProduct"] = True
+                    else:
+                        show_bool = _coerce_with_policy(
+                            show_value,
+                            "bool",
+                            entry.coerce,
+                            None,
+                            f"{entry.name or entry.price_list_id}_hide",
+                            logger,
+                            errors,
+                        )
+                        if show_bool is not None:
+                            item["HideProduct"] = not bool(show_bool)
 
         items.append(item)
 
@@ -991,6 +1247,50 @@ def _json_default(value: Any) -> str:
     if isinstance(value, Decimal):
         return str(value)
     return str(value)
+
+
+def _summarize_changes(
+    diffs: List[Any],
+    dynamic_diffs: List[Any],
+    price_lists: List[Dict[str, Any]],
+    images: List[Dict[str, Any]],
+) -> Dict[str, List[str]]:
+    summary: Dict[str, Any] = {}
+    for diff in diffs:
+        section = diff.section or "Other"
+        summary.setdefault(section, set()).add(str(diff.target_field))
+    for diff in dynamic_diffs:
+        summary.setdefault("DynamicFields", set()).add(str(diff.target_field))
+    if price_lists:
+        price_ids = sorted(
+            {
+                str(item.get("PriceListId"))
+                for item in price_lists
+                if item.get("PriceListId") is not None
+            }
+        )
+        if price_ids:
+            summary["PriceLists"] = price_ids
+    if images:
+        media_codes = sorted(
+            {
+                str(item.get("mediaCode"))
+                for item in images
+                if item.get("mediaCode") is not None
+            }
+        )
+        if media_codes:
+            summary["Images"] = media_codes
+
+    normalized: Dict[str, List[str]] = {}
+    for key, value in summary.items():
+        if isinstance(value, set):
+            normalized[key] = sorted(value)
+        elif isinstance(value, list):
+            normalized[key] = value
+        else:
+            normalized[key] = [str(value)]
+    return normalized
 
 
 def _is_missing_dynamic_field(message: str) -> bool:

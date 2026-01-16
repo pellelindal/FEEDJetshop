@@ -76,6 +76,8 @@ class PriceListMapping:
     discount_period_source: Optional[str]
     hide_product_source: Optional[str]
     clear_discount_on_missing: bool
+    clear_price_on_missing: bool
+    clear_price_value: Optional[int]
     type: str
     coerce: str
     optional: bool
@@ -228,6 +230,8 @@ def _parse_price_lists(items: Any) -> List[PriceListMapping]:
                 discount_period_source=item.get("discount_period_source"),
                 hide_product_source=item.get("hide_product_source"),
                 clear_discount_on_missing=bool(item.get("clear_discount_on_missing", False)),
+                clear_price_on_missing=bool(item.get("clear_price_on_missing", False)),
+                clear_price_value=item.get("clear_price_value"),
                 type=item.get("type", "int"),
                 coerce=coerce,
                 optional=bool(item.get("optional", False)),

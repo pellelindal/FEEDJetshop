@@ -275,3 +275,93 @@ def test_product_delete_builds_body(monkeypatch):
     assert "<Product_Delete" in captured["body"]
     assert "<ArticleNumber>Pelle-1175-95-1</ArticleNumber>" in captured["body"]
     assert "<AddRedirect>" not in captured["body"]
+
+
+def test_upload_image_builds_body(monkeypatch):
+    config = Config(
+        feed_token_url="https://example.invalid/token",
+        feed_client_id="client",
+        feed_client_secret="secret",
+        feed_export_url="https://example.invalid/export",
+        jetshop_soap_url="https://example.invalid/soap",
+        jetshop_username="user",
+        jetshop_password="pass",
+        jetshop_shop_id="1",
+        jetshop_soap_header_xml=None,
+        jetshop_template_id="1",
+        cultures=["sv-SE", "nb-NO"],
+        log_file="logs/test.log",
+        mapping_file="mappings/mapping.yaml",
+        log_level="INFO",
+        http_timeout=5,
+        retry_count=1,
+        retry_backoff=0.1,
+    )
+    logger = logging.getLogger("test_upload_image")
+    client = JetshopClient(config, logger)
+
+    captured = {}
+
+    def fake_post(body_xml, operation):
+        captured["body"] = body_xml
+        captured["operation"] = operation
+        return (
+            '<soap:Envelope xmlns:soap="http://www.w3.org/2003/05/soap-envelope">'
+            "<soap:Body></soap:Body>"
+            "</soap:Envelope>"
+        )
+
+    monkeypatch.setattr(client, "_post_soap", fake_post)
+
+    client.upload_image("BASE64", "Pelle-3447-10.jpg", "Pelle-3447-10.jpg")
+
+    assert captured["operation"] == "UploadImage"
+    assert "<UploadImage" in captured["body"]
+    assert "<ImageByte>BASE64</ImageByte>" in captured["body"]
+    assert "<FileName>Pelle-3447-10.jpg</FileName>" in captured["body"]
+    assert "<ImageName>Pelle-3447-10.jpg</ImageName>" in captured["body"]
+
+
+def test_product_add_update_images_builds_body(monkeypatch):
+    config = Config(
+        feed_token_url="https://example.invalid/token",
+        feed_client_id="client",
+        feed_client_secret="secret",
+        feed_export_url="https://example.invalid/export",
+        jetshop_soap_url="https://example.invalid/soap",
+        jetshop_username="user",
+        jetshop_password="pass",
+        jetshop_shop_id="1",
+        jetshop_soap_header_xml=None,
+        jetshop_template_id="1",
+        cultures=["sv-SE", "nb-NO"],
+        log_file="logs/test.log",
+        mapping_file="mappings/mapping.yaml",
+        log_level="INFO",
+        http_timeout=5,
+        retry_count=1,
+        retry_backoff=0.1,
+    )
+    logger = logging.getLogger("test_add_update_images")
+    client = JetshopClient(config, logger)
+
+    captured = {}
+
+    def fake_post(body_xml, operation):
+        captured["body"] = body_xml
+        captured["operation"] = operation
+        return (
+            '<soap:Envelope xmlns:soap="http://www.w3.org/2003/05/soap-envelope">'
+            "<soap:Body></soap:Body>"
+            "</soap:Envelope>"
+        )
+
+    monkeypatch.setattr(client, "_post_soap", fake_post)
+
+    client.product_add_update_images(["Pelle-3447-10"])
+
+    assert captured["operation"] == "Product_AddUpdateImages"
+    assert "<Product_AddUpdateImages" in captured["body"]
+    assert "<ArticleNumber>Pelle-3447-10</ArticleNumber>" in captured["body"]
+    assert "<Reload>true</Reload>" in captured["body"]
+    assert "<divider>.</divider>" in captured["body"]

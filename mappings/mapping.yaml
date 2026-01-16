@@ -90,6 +90,7 @@ dynamic_fields_auto_map:
     - atr_height
     - atr_dia
     - size
+    - b2c_mp
     - atr_colour
     - atr_grouping
     - atr_length
@@ -178,6 +179,8 @@ price_lists:
     discounted_price_source: attributes[b2c_disc_price_mp_se].value
     discount_period_source: attributes[b2c_disc_bo_se].value
     hide_product_source: attributes[se_show_mp].value
+    clear_price_on_missing: true
+    clear_price_value: -1
     clear_discount_on_missing: true
     type: int
     coerce: coerce
@@ -189,6 +192,8 @@ price_lists:
     discounted_price_source: attributes[b2c_disc_price_mp_no].value
     discount_period_source: attributes[b2c_disc_bo_no].value
     hide_product_source: attributes[no_show_mp].value
+    clear_price_on_missing: true
+    clear_price_value: -1
     clear_discount_on_missing: true
     type: int
     coerce: coerce
@@ -200,6 +205,8 @@ price_lists:
     discounted_price_source: attributes[b2c_disc_price_mp_b2b].value
     discount_period_source: attributes[b2c_disc_bo_b2b].value
     hide_product_source: attributes[b2b_show_mp].value
+    clear_price_on_missing: true
+    clear_price_value: -1
     clear_discount_on_missing: true
     type: int
     coerce: coerce

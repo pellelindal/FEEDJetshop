@@ -60,6 +60,9 @@ class StubFeedClient:
             return [p for p in self.products if p["identifier"]["productNo"] == product_no]
         return self.products[:limit] if limit else self.products
 
+    def fetch_media_base64(self, media_code):
+        return "R0lGODdhAQABAIAAAP"
+
 
 class StubJetshopClient:
     def __init__(self, raise_on_get=False, dyn_failures=None):
@@ -70,6 +73,8 @@ class StubJetshopClient:
         self.dyn_inputs = []
         self.delete_calls = 0
         self.delete_article_numbers = []
+        self.image_uploads = []
+        self.image_link_calls = 0
         self.price_list_calls = 0
         self.price_list_inputs = []
         self.add_update_payloads = []
@@ -101,6 +106,12 @@ class StubJetshopClient:
     def product_delete(self, article_number):
         self.delete_calls += 1
         self.delete_article_numbers.append(article_number)
+
+    def upload_image(self, base64_code, file_name, image_name):
+        self.image_uploads.append((base64_code, file_name, image_name))
+
+    def product_add_update_images(self, article_numbers):
+        self.image_link_calls += 1
 
 
 def test_sync_engine_dry_run_writes_diff(tmp_path, monkeypatch):
@@ -178,7 +189,12 @@ def test_sync_engine_clears_discount_on_missing(tmp_path, monkeypatch):
     mapping_path = Path(__file__).resolve().parents[1] / "mappings" / "mapping.yaml"
     mapping = load_mapping(mapping_path)
 
-    feed_client = StubFeedClient([build_sample_product()])
+    product = build_sample_product()
+    product["attributes"].append({"importCode": "b2c_disc_price_mp_se", "dataType": "FLOAT"})
+    product["attributes"].append({"importCode": "b2c_disc_price_mp_no", "dataType": "FLOAT"})
+    product["attributes"].append({"importCode": "b2c_disc_price_mp_b2b", "dataType": "FLOAT"})
+
+    feed_client = StubFeedClient([product])
     jetshop_client = StubJetshopClient()
     logger = logging.getLogger("test_sync_engine_discount_clear")
     logger.addHandler(logging.NullHandler())
@@ -226,6 +242,36 @@ def test_sync_engine_clears_discount_on_zero(tmp_path, monkeypatch):
     assert jetshop_client.price_list_inputs
     for item in jetshop_client.price_list_inputs:
         assert item.get("DiscountedPriceIncVat") == -1
+
+
+def test_sync_engine_clears_price_on_missing_value(tmp_path, monkeypatch):
+    mapping_path = Path(__file__).resolve().parents[1] / "mappings" / "mapping.yaml"
+    mapping = load_mapping(mapping_path)
+
+    product = build_sample_product()
+    product["attributes"] = [
+        attr for attr in product["attributes"] if attr["importCode"] != "b2c_price_no"
+    ]
+    product["attributes"].append({"importCode": "b2c_price_no", "dataType": "FLOAT"})
+
+    feed_client = StubFeedClient([product])
+    jetshop_client = StubJetshopClient()
+    logger = logging.getLogger("test_sync_engine_price_clear")
+    logger.addHandler(logging.NullHandler())
+    state_store = StateStore(tmp_path / "state" / "last_run.json")
+
+    monkeypatch.chdir(tmp_path)
+
+    engine = SyncEngine(feed_client, jetshop_client, mapping, logger, state_store)
+    report = engine.sync("2025-01-01T00:00:00Z", "Pelle-1092-10", None, False)
+
+    assert report["counts"]["failed"] == 0
+    no_item = next(
+        item
+        for item in jetshop_client.price_list_inputs
+        if item.get("PriceListId") == "0036268d-6d49-4a21-b0a2-3c12af44fb14"
+    )
+    assert no_item.get("PriceIncVat") == -1
 
 
 def test_sync_engine_discount_period_sets_dates(tmp_path, monkeypatch):
@@ -378,6 +424,94 @@ def test_sync_engine_clears_dynamic_field_when_value_removed(tmp_path, monkeypat
     assert dia_items
     for loc in dia_items[0].get("ItemValues", []):
         assert loc.get("Value") == ""
+
+
+def test_sync_engine_uploads_images(tmp_path, monkeypatch):
+    mapping_path = Path(__file__).resolve().parents[1] / "mappings" / "mapping.yaml"
+    mapping = load_mapping(mapping_path)
+
+    product = build_sample_product()
+    product["media"] = [
+        {
+            "action": "CREATE",
+            "mediaCode": "7785",
+            "mediaType": "IMAGE",
+            "fileName": "Pelle-3447-10.jpg",
+            "sortNo": 3,
+        }
+    ]
+
+    feed_client = StubFeedClient([product])
+    jetshop_client = StubJetshopClient()
+    logger = logging.getLogger("test_sync_engine_images")
+    logger.addHandler(logging.NullHandler())
+    state_store = StateStore(tmp_path / "state" / "last_run.json")
+
+    monkeypatch.chdir(tmp_path)
+
+    engine = SyncEngine(feed_client, jetshop_client, mapping, logger, state_store)
+    report = engine.sync("2025-01-01T00:00:00Z", "Pelle-1092-10", None, False)
+
+    assert report["counts"]["failed"] == 0
+    assert jetshop_client.image_uploads
+    assert jetshop_client.image_link_calls == 1
+
+
+def test_sync_engine_missing_show_flag_hides_product(tmp_path, monkeypatch):
+    mapping_path = Path(__file__).resolve().parents[1] / "mappings" / "mapping.yaml"
+    mapping = load_mapping(mapping_path)
+
+    product = build_sample_product()
+    product["attributes"] = [
+        attr for attr in product["attributes"] if attr["importCode"] != "se_show_mp"
+    ]
+    product["attributes"].append(
+        {"importCode": "se_show_mp", "dataType": "BOOLEAN"}
+    )
+
+    feed_client = StubFeedClient([product])
+    jetshop_client = StubJetshopClient()
+    logger = logging.getLogger("test_sync_engine_hide_missing")
+    logger.addHandler(logging.NullHandler())
+    state_store = StateStore(tmp_path / "state" / "last_run.json")
+
+    monkeypatch.chdir(tmp_path)
+
+    engine = SyncEngine(feed_client, jetshop_client, mapping, logger, state_store)
+    report = engine.sync("2025-01-01T00:00:00Z", "Pelle-1092-10", None, False)
+
+    assert report["counts"]["failed"] == 0
+    se_item = next(
+        item
+        for item in jetshop_client.price_list_inputs
+        if item.get("PriceListId") == "7c7dfec3-2312-4dc9-a74f-913f3da0c686"
+    )
+    assert se_item.get("HideProduct") is True
+
+
+def test_sync_engine_missing_boolean_dynamic_field_sets_true(tmp_path, monkeypatch):
+    mapping_path = Path(__file__).resolve().parents[1] / "mappings" / "mapping.yaml"
+    mapping = load_mapping(mapping_path)
+
+    product = build_sample_product()
+    product["attributes"].append({"importCode": "b2c_mp", "dataType": "BOOLEAN"})
+
+    feed_client = StubFeedClient([product])
+    jetshop_client = StubJetshopClient()
+    logger = logging.getLogger("test_sync_engine_missing_boolean_dyn")
+    logger.addHandler(logging.NullHandler())
+    state_store = StateStore(tmp_path / "state" / "last_run.json")
+
+    monkeypatch.chdir(tmp_path)
+
+    engine = SyncEngine(feed_client, jetshop_client, mapping, logger, state_store)
+    report = engine.sync("2025-01-01T00:00:00Z", "Pelle-1092-10", None, False)
+
+    assert report["counts"]["failed"] == 0
+    b2c_items = [item for item in jetshop_client.dyn_inputs[0] if item["Key"] == "b2c_mp"]
+    assert b2c_items
+    for loc in b2c_items[0].get("ItemValues", []):
+        assert loc.get("Value") == "true"
 
 
 def test_sync_engine_deletes_when_feed_marked_deleted(tmp_path, monkeypatch):

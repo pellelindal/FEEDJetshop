@@ -1,6 +1,6 @@
 # MrPlant FEED -> Jetshop Integration
 
-Production-minded synchronization service for MrPlant. FEED is the source of truth and Jetshop is updated via SOAP. The sync is mapping-driven, logged, supports dry-run, and emits diffs/reports for audit.
+Production-minded synchronization service for MrPlant. FEED is the source of truth and Jetshop is updated via SOAP. The sync is mapping-driven, logged, and supports dry-run.
 
 ## Requirements
 - Python 3.10+
@@ -75,5 +75,5 @@ python -m src.main sync --since <ISO>
 
 ## Notes
 - FEED is the source of truth.
-- Images are intentionally not synced yet.
+- Images are synced from FEED media (base64 download + UploadImage + Product_AddUpdateImages).
 - Prices are synced via Jetshop price lists (`PriceList_UpdateArticleIncVAT`) using `price_lists` in `mappings/mapping.yaml`. Product price is not sent in `Product_AddUpdate`.
