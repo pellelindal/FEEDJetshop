@@ -195,6 +195,68 @@ class FeedClient:
                 extra["detail"] = error_message
             log_fn("feed_fetch", extra=extra)
 
+    def fetch_product_full(self, product_no: str) -> Optional[Dict[str, Any]]:
+        start = time.monotonic()
+        success = False
+        error_message = None
+        status_code = None
+        response_text = None
+        token = self.get_token()
+        url = f"{self._base_url}/export/export/full"
+        params = {"productNo": product_no}
+
+        try:
+            response = request_with_retry(
+                self.session,
+                "POST",
+                url,
+                logger=self.logger,
+                timeout=self.config.http_timeout,
+                retries=self.config.retry_count,
+                backoff=self.config.retry_backoff,
+                params=params,
+                headers={"Authorization": f"Bearer {token}", "Accept": "application/json"},
+            )
+            status_code = response.status_code
+            response_text = response.text
+            response.raise_for_status()
+            payload = response.json()
+            self._log_api_response(
+                "feed_api_response",
+                json.dumps(payload, ensure_ascii=True),
+                status_code,
+                True,
+                api="export_full",
+                productNo=product_no,
+            )
+            content = payload.get("content") or []
+            success = True
+            return content[0] if content else None
+        except Exception as exc:
+            error_message = str(exc)
+            raise
+        finally:
+            duration_ms = int((time.monotonic() - start) * 1000)
+            log_fn = self.logger.info if success else self.logger.error
+            extra = {
+                "event": "feed_full_fetch",
+                "durationMs": duration_ms,
+                "productNo": product_no,
+                "success": success,
+            }
+            if error_message:
+                extra["detail"] = error_message
+            log_fn("feed_full_fetch", extra=extra)
+            if response_text is not None and not success:
+                self._log_api_response(
+                    "feed_api_response",
+                    response_text,
+                    status_code,
+                    success,
+                    api="export_full",
+                    productNo=product_no,
+                )
+
     def fetch_media_base64(self, media_code: str) -> str:
         start = time.monotonic()
         success = False

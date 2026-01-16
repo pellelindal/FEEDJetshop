@@ -74,8 +74,6 @@ class SyncEngine:
                 counts["failed"] += 1
                 continue
 
-            self._log_unmapped(product, product_no_value)
-
             action = product.get("action")
             if action == "Delete" or _is_feed_deleted(product):
                 result = self._handle_delete(product_no_value, dry_run)
@@ -86,12 +84,25 @@ class SyncEngine:
                     counts["failed"] += 1
                 continue
 
+            skip_result = self._maybe_skip_due_to_b2c_mp(product_no_value)
+            if skip_result is not None:
+                results.append(skip_result)
+                if skip_result.success:
+                    counts["skipped"] += 1
+                else:
+                    counts["failed"] += 1
+                continue
+
+            self._log_unmapped(product, product_no_value)
+
             result = self._handle_update(product, product_no_value, dry_run)
             results.append(result)
             if not result.success:
                 counts["failed"] += 1
             elif result.action == "no_change":
                 counts["no_change"] += 1
+            elif result.action == "skip":
+                counts["skipped"] += 1
             else:
                 counts["updated"] += 1
 
@@ -209,6 +220,79 @@ class SyncEngine:
                 extra={"event": "product_delete_failed", "productNo": product_no, "success": False, "detail": str(exc)},
             )
             return ProductProcessResult(product_no, "delete", False, [str(exc)], 0, 0)
+
+    def _maybe_skip_due_to_b2c_mp(self, product_no: str) -> Optional[ProductProcessResult]:
+        try:
+            full_product = self.feed_client.fetch_product_full(product_no)
+        except Exception as exc:
+            self.logger.error(
+                "feed_full_fetch_failed",
+                extra={
+                    "event": "feed_full_fetch_failed",
+                    "productNo": product_no,
+                    "success": False,
+                    "detail": str(exc),
+                },
+            )
+            return ProductProcessResult(product_no, "skip", False, [str(exc)], 0, 0)
+
+        if not full_product:
+            self.logger.warning(
+                "feed_full_missing",
+                extra={"event": "feed_full_missing", "productNo": product_no},
+            )
+            return ProductProcessResult(
+                product_no,
+                "skip",
+                False,
+                ["Full product not found in FEED"],
+                0,
+                0,
+            )
+
+        attributes = full_product.get("attributes") or []
+        b2c_attr = next(
+            (attr for attr in attributes if attr.get("importCode") == "b2c_mp"),
+            None,
+        )
+        if b2c_attr is None:
+            self._log_b2c_skip(product_no, "missing_attribute", None)
+            return ProductProcessResult(product_no, "skip", True, [], 0, 0)
+
+        if "value" not in b2c_attr:
+            self._log_b2c_skip(product_no, "missing_value", None)
+            return ProductProcessResult(product_no, "skip", True, [], 0, 0)
+
+        raw_value = b2c_attr.get("value")
+        if isinstance(raw_value, dict):
+            raw_value = _select_any_value(raw_value)
+
+        if is_empty(raw_value):
+            self._log_b2c_skip(product_no, "empty_value", raw_value)
+            return ProductProcessResult(product_no, "skip", True, [], 0, 0)
+
+        try:
+            flag = coerce_value(raw_value, "bool", "coerce")
+        except ValidationError:
+            self._log_b2c_skip(product_no, "invalid_value", raw_value)
+            return ProductProcessResult(product_no, "skip", True, [], 0, 0)
+
+        if not flag:
+            self._log_b2c_skip(product_no, "false_value", raw_value)
+            return ProductProcessResult(product_no, "skip", True, [], 0, 0)
+
+        return None
+
+    def _log_b2c_skip(self, product_no: str, reason: str, value: Any) -> None:
+        self.logger.info(
+            "b2c_mp_skip",
+            extra={
+                "event": "b2c_mp_skip",
+                "productNo": product_no,
+                "reason": reason,
+                "value": value,
+            },
+        )
 
     def _handle_update(self, product: Dict[str, Any], product_no: str, dry_run: bool) -> ProductProcessResult:
         errors: List[str] = []
@@ -654,6 +738,9 @@ def _apply_mapping_entry(
     except ValidationError as exc:
         errors.append(str(exc))
         return None
+
+    if allow_nil and entry.type in {"date", "datetime"} and is_empty(value):
+        return NIL_VALUE
 
     if not entry.allow_empty and is_empty(value):
         if entry.optional or entry.preserve_if_missing:
@@ -1291,6 +1378,13 @@ def _summarize_changes(
         else:
             normalized[key] = [str(value)]
     return normalized
+
+
+def _select_any_value(value: Dict[str, Any]) -> Any:
+    for item in value.values():
+        if not is_empty(item):
+            return item
+    return None
 
 
 def _is_missing_dynamic_field(message: str) -> bool:

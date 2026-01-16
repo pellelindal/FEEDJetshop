@@ -1,3 +1,4 @@
+import copy
 import logging
 from pathlib import Path
 from datetime import datetime
@@ -52,8 +53,16 @@ def build_sample_product():
 
 
 class StubFeedClient:
-    def __init__(self, products):
+    def __init__(self, products, full_products=None):
         self.products = products
+        if full_products is None:
+            self.full_products = {
+                p["identifier"]["productNo"]: _ensure_b2c_mp_true(p) for p in products
+            }
+        else:
+            self.full_products = {
+                p["identifier"]["productNo"]: p for p in full_products
+            }
 
     def fetch_products(self, export_from, product_no=None, limit=None):
         if product_no:
@@ -62,6 +71,17 @@ class StubFeedClient:
 
     def fetch_media_base64(self, media_code):
         return "R0lGODdhAQABAIAAAP"
+
+    def fetch_product_full(self, product_no):
+        return self.full_products.get(product_no)
+
+
+def _ensure_b2c_mp_true(product):
+    clone = copy.deepcopy(product)
+    attributes = [attr for attr in clone.get("attributes", []) if attr.get("importCode") != "b2c_mp"]
+    attributes.append({"importCode": "b2c_mp", "dataType": "BOOLEAN", "value": True})
+    clone["attributes"] = attributes
+    return clone
 
 
 class StubJetshopClient:
@@ -512,6 +532,34 @@ def test_sync_engine_missing_boolean_dynamic_field_sets_true(tmp_path, monkeypat
     assert b2c_items
     for loc in b2c_items[0].get("ItemValues", []):
         assert loc.get("Value") == "true"
+
+
+def test_sync_engine_skips_when_b2c_mp_missing_in_full(tmp_path, monkeypatch):
+    mapping_path = Path(__file__).resolve().parents[1] / "mappings" / "mapping.yaml"
+    mapping = load_mapping(mapping_path)
+
+    product = build_sample_product()
+    full_product = build_sample_product()
+    full_product["attributes"] = [
+        attr for attr in full_product["attributes"] if attr["importCode"] != "b2c_mp"
+    ]
+    full_product["attributes"].append({"importCode": "b2c_mp", "dataType": "BOOLEAN"})
+
+    feed_client = StubFeedClient([product], full_products=[full_product])
+    jetshop_client = StubJetshopClient()
+    logger = logging.getLogger("test_sync_engine_skip_b2c_mp")
+    logger.addHandler(logging.NullHandler())
+    state_store = StateStore(tmp_path / "state" / "last_run.json")
+
+    monkeypatch.chdir(tmp_path)
+
+    engine = SyncEngine(feed_client, jetshop_client, mapping, logger, state_store)
+    report = engine.sync("2025-01-01T00:00:00Z", "Pelle-1092-10", None, False)
+
+    assert report["counts"]["skipped"] == 1
+    assert jetshop_client.add_update_calls == 0
+    assert jetshop_client.dyn_save_calls == 0
+    assert jetshop_client.price_list_calls == 0
 
 
 def test_sync_engine_deletes_when_feed_marked_deleted(tmp_path, monkeypatch):
