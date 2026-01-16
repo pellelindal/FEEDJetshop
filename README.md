@@ -65,7 +65,6 @@ Optional args:
 ## Outputs
 - Logs: console + rotating file (`logs/integration.log`).
 - Dry-run diffs: `diffs/<productNo>.json`.
-- Run report: `run_report_<timestamp>.json`.
 - State: `state/last_run.json` (updated after successful runs).
 
 ## Scheduling

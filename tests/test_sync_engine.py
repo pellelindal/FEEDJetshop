@@ -68,6 +68,8 @@ class StubJetshopClient:
         self.add_update_calls = 0
         self.dyn_save_calls = 0
         self.dyn_inputs = []
+        self.delete_calls = 0
+        self.delete_article_numbers = []
         self.price_list_calls = 0
         self.price_list_inputs = []
         self.add_update_payloads = []
@@ -95,6 +97,10 @@ class StubJetshopClient:
     def price_list_update(self, inputs):
         self.price_list_calls += 1
         self.price_list_inputs = inputs
+
+    def product_delete(self, article_number):
+        self.delete_calls += 1
+        self.delete_article_numbers.append(article_number)
 
 
 def test_sync_engine_dry_run_writes_diff(tmp_path, monkeypatch):
@@ -346,3 +352,74 @@ def test_sync_engine_auto_maps_dynamic_fields(tmp_path, monkeypatch):
     assert jetshop_client.dyn_inputs
     posted_keys = {item["Key"] for item in jetshop_client.dyn_inputs[0]}
     assert "atr_dia" in posted_keys
+
+
+def test_sync_engine_clears_dynamic_field_when_value_removed(tmp_path, monkeypatch):
+    mapping_path = Path(__file__).resolve().parents[1] / "mappings" / "mapping.yaml"
+    mapping = load_mapping(mapping_path)
+
+    product = build_sample_product()
+    product["attributes"].append({"importCode": "atr_dia", "dataType": "FLOAT"})
+
+    feed_client = StubFeedClient([product])
+    jetshop_client = StubJetshopClient()
+    logger = logging.getLogger("test_sync_engine_clear_dyn")
+    logger.addHandler(logging.NullHandler())
+    state_store = StateStore(tmp_path / "state" / "last_run.json")
+
+    monkeypatch.chdir(tmp_path)
+
+    engine = SyncEngine(feed_client, jetshop_client, mapping, logger, state_store)
+    report = engine.sync("2025-01-01T00:00:00Z", "Pelle-1092-10", None, False)
+
+    assert report["counts"]["failed"] == 0
+    assert jetshop_client.dyn_inputs
+    dia_items = [item for item in jetshop_client.dyn_inputs[0] if item["Key"] == "atr_dia"]
+    assert dia_items
+    for loc in dia_items[0].get("ItemValues", []):
+        assert loc.get("Value") == ""
+
+
+def test_sync_engine_deletes_when_feed_marked_deleted(tmp_path, monkeypatch):
+    mapping_path = Path(__file__).resolve().parents[1] / "mappings" / "mapping.yaml"
+    mapping = load_mapping(mapping_path)
+
+    product = build_sample_product()
+    product["productHead"] = {"deleted": True}
+
+    feed_client = StubFeedClient([product])
+    jetshop_client = StubJetshopClient()
+    logger = logging.getLogger("test_sync_engine_delete_flag")
+    logger.addHandler(logging.NullHandler())
+    state_store = StateStore(tmp_path / "state" / "last_run.json")
+
+    monkeypatch.chdir(tmp_path)
+
+    engine = SyncEngine(feed_client, jetshop_client, mapping, logger, state_store)
+    report = engine.sync("2025-01-01T00:00:00Z", "Pelle-1092-10", None, False)
+
+    assert report["counts"]["deleted"] == 1
+    assert jetshop_client.delete_calls == 1
+    assert jetshop_client.delete_article_numbers == ["Pelle-1092-10"]
+
+
+def test_sync_engine_deletes_when_top_level_deleted(tmp_path, monkeypatch):
+    mapping_path = Path(__file__).resolve().parents[1] / "mappings" / "mapping.yaml"
+    mapping = load_mapping(mapping_path)
+
+    product = build_sample_product()
+    product["deleted"] = "true"
+
+    feed_client = StubFeedClient([product])
+    jetshop_client = StubJetshopClient()
+    logger = logging.getLogger("test_sync_engine_delete_top_level")
+    logger.addHandler(logging.NullHandler())
+    state_store = StateStore(tmp_path / "state" / "last_run.json")
+
+    monkeypatch.chdir(tmp_path)
+
+    engine = SyncEngine(feed_client, jetshop_client, mapping, logger, state_store)
+    report = engine.sync("2025-01-01T00:00:00Z", "Pelle-1092-10", None, False)
+
+    assert report["counts"]["deleted"] == 1
+    assert jetshop_client.delete_calls == 1

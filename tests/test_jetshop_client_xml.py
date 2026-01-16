@@ -231,3 +231,47 @@ def test_price_list_update_builds_body(monkeypatch):
     assert captured["operation"] == "PriceList_UpdateArticleIncVAT"
     assert "<PriceList_UpdateArticleIncVAT" in captured["body"]
     assert "<PriceListId>guid-1</PriceListId>" in captured["body"]
+
+
+def test_product_delete_builds_body(monkeypatch):
+    config = Config(
+        feed_token_url="https://example.invalid/token",
+        feed_client_id="client",
+        feed_client_secret="secret",
+        feed_export_url="https://example.invalid/export",
+        jetshop_soap_url="https://example.invalid/soap",
+        jetshop_username="user",
+        jetshop_password="pass",
+        jetshop_shop_id="1",
+        jetshop_soap_header_xml=None,
+        jetshop_template_id="1",
+        cultures=["sv-SE", "nb-NO"],
+        log_file="logs/test.log",
+        mapping_file="mappings/mapping.yaml",
+        log_level="INFO",
+        http_timeout=5,
+        retry_count=1,
+        retry_backoff=0.1,
+    )
+    logger = logging.getLogger("test_product_delete")
+    client = JetshopClient(config, logger)
+
+    captured = {}
+
+    def fake_post(body_xml, operation):
+        captured["body"] = body_xml
+        captured["operation"] = operation
+        return (
+            '<soap:Envelope xmlns:soap="http://www.w3.org/2003/05/soap-envelope">'
+            "<soap:Body></soap:Body>"
+            "</soap:Envelope>"
+        )
+
+    monkeypatch.setattr(client, "_post_soap", fake_post)
+
+    client.product_delete("Pelle-1175-95-1")
+
+    assert captured["operation"] == "Product_Delete"
+    assert "<Product_Delete" in captured["body"]
+    assert "<ArticleNumber>Pelle-1175-95-1</ArticleNumber>" in captured["body"]
+    assert "<AddRedirect>" not in captured["body"]

@@ -75,7 +75,7 @@ class SyncEngine:
             self._log_unmapped(product, product_no_value)
 
             action = product.get("action")
-            if action == "Delete":
+            if action == "Delete" or _is_feed_deleted(product):
                 result = self._handle_delete(product_no_value, dry_run)
                 results.append(result)
                 if result.success:
@@ -102,9 +102,6 @@ class SyncEngine:
             "counts": counts,
             "products": [result.__dict__ for result in results],
         }
-        report_path = Path(f"run_report_{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}.json")
-        report_path.write_text(json.dumps(report, ensure_ascii=True, indent=2), encoding="utf-8")
-
         if counts["failed"] == 0:
             self.state_store.write_now()
 
@@ -347,6 +344,7 @@ class SyncEngine:
                 None,
                 self.logger,
                 errors,
+                allow_nil=True,
             )
             if value is None:
                 continue
@@ -426,6 +424,21 @@ def _get_product_no(product: Dict[str, Any]) -> Optional[str]:
     return identifier.get("productNo")
 
 
+def _is_feed_deleted(product: Dict[str, Any]) -> bool:
+    top_level = product.get("deleted")
+    if isinstance(top_level, bool):
+        return top_level
+    if isinstance(top_level, str):
+        return top_level.strip().lower() == "true"
+    product_head = product.get("productHead") or {}
+    deleted = product_head.get("deleted")
+    if isinstance(deleted, bool):
+        return deleted
+    if isinstance(deleted, str):
+        return deleted.strip().lower() == "true"
+    return False
+
+
 def _apply_mapping_entry(
     entry: FieldMapping,
     product: Dict[str, Any],
@@ -435,10 +448,20 @@ def _apply_mapping_entry(
     culture: Optional[str],
     logger,
     errors: List[str],
+    allow_nil: bool = False,
 ) -> Any:
     source = _select_source(entry, culture)
     raw_value, attribute = _resolve_source(source, product, attributes_by_code, texts_by_code)
     value = raw_value
+
+    if _attribute_value_removed(source, attribute):
+        empty_value = _empty_value_for_type(entry.type, allow_nil=allow_nil)
+        if empty_value is not None:
+            return empty_value
+        if entry.optional or entry.preserve_if_missing:
+            return None
+        errors.append(f"{entry.target}: missing required value")
+        return None
 
     if attribute and isinstance(raw_value, dict) and "value" in raw_value:
         value = raw_value.get("value")
@@ -491,6 +514,9 @@ def _apply_dynamic_mapping(
     source = _select_source(entry, culture)
     raw_value, attribute = _resolve_source(source, product, attributes_by_code, texts_by_code)
     value = raw_value
+
+    if _attribute_value_removed(source, attribute):
+        return ""
 
     if attribute and isinstance(raw_value, dict) and "value" in raw_value:
         value = raw_value.get("value")
@@ -557,6 +583,32 @@ def _extract_categories(
     if isinstance(categories, list):
         return [str(item) for item in categories]
     return [str(categories)]
+
+
+def _attribute_value_removed(source: str, attribute: Optional[Dict[str, Any]]) -> bool:
+    if not attribute:
+        return False
+    root, _key, _path = parse_source_selector(source)
+    if root != "attributes":
+        return False
+    if "value" not in attribute:
+        return True
+    value = attribute.get("value")
+    if isinstance(value, dict):
+        if not value:
+            return True
+        return all(is_empty(item) for item in value.values())
+    return is_empty(value)
+
+
+def _empty_value_for_type(expected_type: str, allow_nil: bool) -> Any:
+    if expected_type == "string":
+        return ""
+    if expected_type == "list":
+        return []
+    if allow_nil and expected_type in {"date", "datetime"}:
+        return NIL_VALUE
+    return None
 
 
 def _build_price_list_items(

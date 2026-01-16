@@ -133,8 +133,6 @@ class JetshopClient:
 <Product_Delete xmlns="{WS_NS}">
   <productDeleteRequest>
     <ArticleNumber>{escape_xml(article_number)}</ArticleNumber>
-    <AddRedirect>false</AddRedirect>
-    <Redirects />
   </productDeleteRequest>
 </Product_Delete>
 """.strip()

@@ -83,7 +83,25 @@ class FeedClient:
         success = False
         error_message = None
         token = self.get_token()
-        params = {"dateFormat": "SHORT", "exportFrom": export_from}
+        export_url = self.config.feed_export_url.rstrip("/")
+        if export_url.endswith("/full"):
+            export_url = export_url[: -len("/full")]
+
+        page_size = limit if limit is not None else 20
+        params = {
+            "showInactive": "true",
+            "orderByLanguageCode": "nb",
+            "dateFormat": "SHORT",
+            "page": 0,
+            "size": page_size,
+            "exportFrom": export_from,
+            "changesOnly": "true",
+            "includeDeleted": "true",
+            "includeModifiedByBasedata": "true",
+            "productHeadOnly": "false",
+            "includeOptions": "true",
+            "includeLastModifiedTimestamp": "false",
+        }
         if product_no:
             params["productNo"] = product_no
 
@@ -91,7 +109,7 @@ class FeedClient:
             response = request_with_retry(
                 self.session,
                 "POST",
-                self.config.feed_export_url,
+                export_url,
                 logger=self.logger,
                 timeout=self.config.http_timeout,
                 retries=self.config.retry_count,

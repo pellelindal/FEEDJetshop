@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import json
 import logging
-from logging.handlers import RotatingFileHandler
-from datetime import datetime, timezone
+import os
+from datetime import date, datetime, timezone
+from decimal import Decimal
 from pathlib import Path
 from typing import Any, Dict
 
@@ -50,7 +51,65 @@ class JsonFormatter(logging.Formatter):
         if record.exc_info:
             payload["exception"] = self.formatException(record.exc_info)
 
-        return json.dumps(payload, ensure_ascii=True)
+        return json.dumps(payload, ensure_ascii=True, default=_json_default)
+
+
+class TruncatingFileHandler(logging.FileHandler):
+    """File handler that keeps the newest log content within a size limit."""
+
+    def __init__(self, filename: str | Path, max_bytes: int) -> None:
+        super().__init__(filename, mode="a", encoding="utf-8", delay=False)
+        self.max_bytes = max_bytes
+
+    def emit(self, record: logging.LogRecord) -> None:
+        super().emit(record)
+        try:
+            self._truncate_if_needed()
+        except Exception:
+            self.handleError(record)
+
+    def _truncate_if_needed(self) -> None:
+        if self.max_bytes <= 0:
+            return
+
+        try:
+            self.stream.flush()
+        except Exception:
+            return
+
+        path = self.baseFilename
+        try:
+            size = os.path.getsize(path)
+        except OSError:
+            return
+        if size <= self.max_bytes:
+            return
+
+        try:
+            with open(path, "rb+") as handle:
+                handle.seek(0, os.SEEK_END)
+                size = handle.tell()
+                if size <= self.max_bytes:
+                    return
+                start = max(0, size - self.max_bytes)
+                handle.seek(start)
+                data = handle.read()
+                newline_index = data.find(b"\n")
+                if newline_index != -1:
+                    data = data[newline_index + 1 :]
+                handle.seek(0)
+                handle.write(data)
+                handle.truncate()
+        except OSError:
+            return
+
+
+def _json_default(value: Any) -> str:
+    if isinstance(value, (datetime, date)):
+        return value.isoformat()
+    if isinstance(value, Decimal):
+        return str(value)
+    return str(value)
 
 
 class MergeExtraAdapter(logging.LoggerAdapter):
@@ -76,7 +135,7 @@ def setup_logging(log_file: str, level: str, run_id: str) -> logging.LoggerAdapt
 
     log_path = Path(log_file)
     log_path.parent.mkdir(parents=True, exist_ok=True)
-    file_handler = RotatingFileHandler(log_path, maxBytes=5 * 1024 * 1024, backupCount=5)
+    file_handler = TruncatingFileHandler(log_path, max_bytes=5 * 1024 * 1024)
     file_handler.setFormatter(formatter)
     file_handler.setLevel(level)
 
